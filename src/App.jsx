@@ -938,34 +938,7 @@ export default function App() {
                 </div>
               )}
 
-              {activeTab === "mmc" && (
-                <div>
-                  <div style={sHead}>◈ MMC Entity Scope Assessment</div>
-                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 20, lineHeight: 1.6 }}>AI-assessed scope across Marsh McLennan group entities. Always validate with legal counsel.</div>
-                  <div style={{ marginBottom: 20 }}>
-                    <div style={{ fontSize: 10, letterSpacing: "0.15em", color: C.critical, textTransform: "uppercase", marginBottom: 10 }}>{"● In Scope (" + (a.mmcScope ? a.mmcScope.filter(function(e) { return e.inScope; }).length : 0) + " entities)"}</div>
-                    {a.mmcScope && a.mmcScope.filter(function(e) { return e.inScope; }).map(function(e, i) {
-                      return (
-                        <div key={i} style={{ background: C.panel, border: "1px solid " + C.critical + "33", borderLeft: "3px solid " + C.critical, borderRadius: 8, padding: "12px 16px", marginBottom: 8, display: "flex", gap: 12 }}>
-                          <span style={{ fontSize: 16, flexShrink: 0 }}>🏢</span>
-                          <div><div style={{ fontSize: 13, fontWeight: "bold", color: C.text, marginBottom: 3 }}>{e.entity}</div><div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{e.reason}</div></div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, letterSpacing: "0.15em", color: C.success, textTransform: "uppercase", marginBottom: 10 }}>{"● Out of Scope (" + (a.mmcScope ? a.mmcScope.filter(function(e) { return !e.inScope; }).length : 0) + " entities)"}</div>
-                    {a.mmcScope && a.mmcScope.filter(function(e) { return !e.inScope; }).map(function(e, i) {
-                      return (
-                        <div key={i} style={{ background: C.panel, border: "1px solid " + C.border, borderLeft: "3px solid " + C.success, borderRadius: 8, padding: "12px 16px", marginBottom: 8, display: "flex", gap: 12 }}>
-                          <span style={{ fontSize: 16, flexShrink: 0, opacity: 0.4 }}>🏢</span>
-                          <div><div style={{ fontSize: 13, fontWeight: "bold", color: C.muted, marginBottom: 3 }}>{e.entity}</div><div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{e.reason}</div></div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+    
 
               {activeTab === "controls" && (
                 <div>
