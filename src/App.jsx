@@ -110,6 +110,10 @@ const iStyle = {
   padding: "8px 10px", outline: "none", boxSizing: "border-box",
 };
 
+// ── Proxy URL — replace with your Vercel deployment URL after deploying ──────
+const PROXY_URL = "https://delphi-lcpa.vercel.app/api/claude";
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function apiCall(messages, maxTokens, useSearch) {
   const body = {
     model: "claude-sonnet-4-20250514",
@@ -119,13 +123,11 @@ async function apiCall(messages, maxTokens, useSearch) {
   if (useSearch) {
     body.tools = [{ type: "web_search_20250305", name: "web_search" }];
   }
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(PROXY_URL, {
     method: "POST",
     headers: {
-  "Content-Type": "application/json",
-  "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY,
-  "anthropic-version": "2023-06-01",
-},
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify(body),
   });
   const data = await res.json();
