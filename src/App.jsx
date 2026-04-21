@@ -377,7 +377,7 @@ function ScannerModal(props) {
 
         {!scanning && scanResults.length > 0 && (
           <div style={{ padding: "14px 24px", borderTop: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 10, color: C.muted }}>Click + Analyse on any regulation to run a full MMC compliance analysis</span>
+            <span style={{ fontSize: 10, color: C.muted }}>Click + Analyse on any regulation to run a full compliance analysis</span>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={onRescan} style={{ background: C.accent3 + "22", border: "1px solid " + C.accent3 + "55", color: "#a78bfa", padding: "7px 16px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>↻ Re-scan</button>
               <button onClick={onClose} style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "7px 16px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit", fontWeight: "bold" }}>Done</button>
@@ -826,10 +826,10 @@ export default function App() {
               </div>
 
               <div className="tab-scroll" style={{ display: "flex", gap: 4, marginBottom: 24, borderBottom: "1px solid " + C.border, paddingBottom: 12 }}>
-                {["summary","mmc","controls","source"].map(function(tab) {
+                {["summary","controls","source"].map(function(tab) {
                   return (
                     <button key={tab} className={"tab " + (activeTab === tab ? "ton" : "toff")} onClick={function() { setActiveTab(tab); }}>
-                      {tab === "summary" ? "📋 Summary" : tab === "mmc" ? ("🏢 MMC (" + (a.mmcScope ? a.mmcScope.length : 0) + ")") : tab === "controls" ? ("⚡ Controls (" + (a.controls ? a.controls.length : 0) + ")") : "📄 Source"}
+                      {tab === "summary" ? "📋 Summary" : tab === "controls" ? ("⚡ Controls (" + (a.controls ? a.controls.length : 0) + ")") : "📄 Source"}
                     </button>
                   );
                 })}
@@ -840,17 +840,17 @@ export default function App() {
                   <div style={sHead}>◈ Executive Summary</div>
                   <div style={sumBox}>{a.summary}</div>
 
-                  {a.mmcRisk && (function() {
-                    var r = a.mmcRisk;
+                  {a.overallRisk && (function() {
+                    var r = a.overallRisk;
                     var rc = riskColor(r.rating);
                     var score = Math.min(10, Math.max(1, r.score || 5));
                     return (
                       <div style={{ marginTop: 24 }}>
-                        <div style={sHead}>◈ MMC Business Risk Rating</div>
+                        <div style={sHead}>◈ Business Risk Rating</div>
                         <div style={{ background: C.panel, border: "1px solid " + rc + "44", borderRadius: 12, overflow: "hidden" }}>
                           <div style={{ background: rc + "18", borderBottom: "1px solid " + rc + "33", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                             <div>
-                              <div style={{ fontSize: 11, color: rc, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 4 }}>MMC-Specific Risk Level</div>
+                              <div style={{ fontSize: 11, color: rc, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 4 }}>Overall Risk Level</div>
                               <div style={{ fontSize: 22, fontWeight: "bold", color: rc }}>{r.rating}</div>
                             </div>
                             <div style={{ textAlign: "center" }}>
