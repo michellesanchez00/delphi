@@ -111,7 +111,7 @@ const iStyle = {
 };
 
 // ── Proxy URL — replace with your Vercel deployment URL after deploying ──────
-const PROXY_URL = "https://delphi-lcpa.vercel.app/api/claude";
+const PROXY_URL = "https://delphi-proxy.vercel.app/api/claude";
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function apiCall(messages, maxTokens, useSearch) {
