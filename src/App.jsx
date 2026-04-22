@@ -24,8 +24,9 @@ if (IS_MOBILE) {
 }
 
 // ── Storage & TTL ─────────────────────────────────────────────────────────────
-const TTL_DEFAULT = 10 * 24 * 60 * 60 * 1000;  // 10 days
-const TTL_INSCOPE = 20 * 24 * 60 * 60 * 1000;  // 20 days
+// Regulations are stored permanently until manually deleted
+const TTL_DEFAULT = null;  // No expiry
+const TTL_INSCOPE = null;  // No expiry
 
 function saveRegs(regs) {
   try { localStorage.setItem("delphi_regs", JSON.stringify(regs)); } catch(e) {}
@@ -45,14 +46,7 @@ function loadRegs() {
   } catch(e) { return []; }
 }
 
-function getExpiryLabel(reg) {
-  var ttl = reg.inScope ? TTL_INSCOPE : TTL_DEFAULT;
-  var ms = ttl - (Date.now() - reg.savedAt);
-  if (ms <= 0) return "Expired";
-  var hours = Math.floor(ms / 3600000);
-  if (hours < 24) return "Expires in " + hours + "h";
-  return "Expires in " + Math.floor(hours / 24) + "d";
-}
+
 
 // Collect all controls from all saved regs (excluding current)
 function getAllControls(regs, excludeId) {
@@ -806,7 +800,7 @@ export default function App() {
                           : reg.analysis
                             ? <span style={{ color: riskColor(reg.analysis.riskLevel) }}>{"● " + reg.analysis.riskLevel + " Risk · " + (reg.analysis.controls || []).length + " Controls"}</span>
                             : <span style={{ color: C.warning }}>⚠ Failed</span>}
-                        {reg.savedAt && !reg.loading && reg.analysis && <span style={{ color: reg.inScope ? C.success : C.muted, marginLeft: "auto" }}>{getExpiryLabel(reg)}</span>}
+                        
                       </div>
                     </div>
                   );
@@ -876,10 +870,9 @@ export default function App() {
               {/* In Scope / Expiry Banner */}
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: selected.inScope ? C.success + "11" : C.panel, border: "1px solid " + (selected.inScope ? C.success + "44" : C.border) }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 10, color: selected.inScope ? C.success : C.muted, fontWeight: "bold", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2 }}>
-                    {selected.inScope ? "✓ In Scope — Retained for 20 days" : "Not marked in scope — Retained for 10 days"}
+                  <div style={{ fontSize: 10, color: selected.inScope ? C.success : C.muted, fontWeight: "bold", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                    {selected.inScope ? "✓ In Scope" : "Not In Scope"}
                   </div>
-                  {selected.savedAt && <div style={{ fontSize: 9, color: C.muted }}>{getExpiryLabel(selected)}</div>}
                 </div>
                 <button
                   onClick={function() {
