@@ -1147,7 +1147,6 @@ export default function App() {
             </div>
           ) : null}
         </div>
-      </div>
       </div>}
 
       {/* Dashboard / Inventory View */}
