@@ -1156,18 +1156,7 @@ export default function App() {
             var totalControls = CONTROLS_LIBRARY.length;
             var domColors = { "Financial Services": C.accent, "Data Privacy": "#a78bfa", "ESG": C.success, "Cybersecurity": C.warning, "AML / Financial Crime": C.critical, "Insurance": "#06b6d4", "Legal": "#f97316", "Compliance": "#8b5cf6" };
 
-            // Map region data with coordinates
-            var regionMap = [
-              { name: "EU", x: 490, y: 155, count: byRegion["EU"] || 0, color: C.accent },
-              { name: "UK", x: 455, y: 140, count: byRegion["UK"] || 0, color: "#06b6d4" },
-              { name: "US", x: 200, y: 180, count: byRegion["US"] || 0, color: C.warning },
-              { name: "Canada", x: 195, y: 130, count: byRegion["Canada"] || 0, color: "#f97316" },
-              { name: "LATAM", x: 240, y: 280, count: byRegion["LATAM"] || 0, color: "#ec4899" },
-              { name: "APAC", x: 730, y: 200, count: byRegion["APAC"] || 0, color: C.success },
-              { name: "Middle East", x: 570, y: 210, count: byRegion["Middle East"] || 0, color: "#f59e0b" },
-              { name: "Africa", x: 510, y: 290, count: byRegion["Africa"] || 0, color: "#a78bfa" },
-              { name: "Global", x: 400, y: 100, count: byRegion["Global"] || 0, color: C.muted },
-            ];
+
 
             return (
               <div>
@@ -1189,58 +1178,7 @@ export default function App() {
                   })}
                 </div>
 
-                {/* Global Map */}
-                <div style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 12, padding: "20px 24px", marginBottom: 24 }}>
-                  <div style={{ fontSize: 10, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 16 }}>◈ Global Regulatory Coverage</div>
-                  <div style={{ position: "relative", width: "100%", paddingBottom: "42%" }}>
-                    <svg viewBox="0 0 900 380" xmlns="http://www.w3.org/2000/svg" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}>
-                      {/* Ocean background */}
-                      <rect width="900" height="380" fill="#0a0f1a" rx="8"/>
-                      {/* Simplified world continents */}
-                      {/* North America */}
-                      <path d="M 80 80 L 180 70 L 280 90 L 300 140 L 270 200 L 240 230 L 200 240 L 160 220 L 120 180 L 90 140 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
-                      {/* South America */}
-                      <path d="M 200 250 L 260 240 L 290 270 L 280 350 L 240 370 L 200 350 L 185 310 L 190 270 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
-                      {/* Europe */}
-                      <path d="M 420 90 L 520 80 L 545 110 L 530 150 L 490 170 L 450 160 L 420 140 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
-                      {/* Africa */}
-                      <path d="M 450 170 L 560 165 L 580 200 L 570 310 L 520 350 L 470 330 L 445 280 L 440 220 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
-                      {/* Middle East */}
-                      <path d="M 545 160 L 620 155 L 640 200 L 610 230 L 565 225 L 545 195 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
-                      {/* Asia */}
-                      <path d="M 600 60 L 820 70 L 850 130 L 830 200 L 780 220 L 700 210 L 640 190 L 615 160 L 600 110 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
-                      {/* Australia */}
-                      <path d="M 720 270 L 820 260 L 840 310 L 800 340 L 740 330 L 710 300 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
-                      {/* UK island */}
-                      <path d="M 435 105 L 455 100 L 460 125 L 440 130 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
 
-                      {/* Region bubbles */}
-                      {regionMap.map(function(r) {
-                        if (r.count === 0) return null;
-                        var radius = Math.max(14, Math.min(32, 10 + r.count * 1.8));
-                        return (
-                          <g key={r.name} style={{ cursor: "pointer" }} onClick={function() { setAppView("inventory"); setInvFilter(function(f) { return Object.assign({}, f, { region: r.name }); }); }}>
-                            <circle cx={r.x} cy={r.y} r={radius + 4} fill={r.color + "15"} />
-                            <circle cx={r.x} cy={r.y} r={radius} fill={r.color + "33"} stroke={r.color} strokeWidth="1.5"/>
-                            <text x={r.x} y={r.y - 2} textAnchor="middle" fill={r.color} fontSize="11" fontWeight="bold" fontFamily="monospace">{r.count}</text>
-                            <text x={r.x} y={r.y + 12} textAnchor="middle" fill={r.color} fontSize="7" fontFamily="monospace">{r.name}</text>
-                          </g>
-                        );
-                      })}
-                    </svg>
-                  </div>
-                  <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 12 }}>
-                    {regionMap.filter(function(r) { return r.count > 0; }).map(function(r) {
-                      return (
-                        <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}
-                          onClick={function() { setAppView("inventory"); setInvFilter(function(f) { return Object.assign({}, f, { region: r.name }); }); }}>
-                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: r.color }}/>
-                          <span style={{ fontSize: 10, color: C.muted }}>{r.name} <span style={{ color: r.color, fontWeight: "bold" }}>{r.count}</span></span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
 
                 {/* Domain breakdown */}
                 <div>
