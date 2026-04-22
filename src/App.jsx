@@ -1,8 +1,8 @@
 import { useState, useMemo } from "react";
 import { REGULATIONS, CONTROLS_LIBRARY, DOMAINS, REGIONS, MARSH_ENTITIES } from "./regulatoryData.js";
 
-// ── MMC Entities ──────────────────────────────────────────────────────────────
-const MMC_ENTITIES = "Marsh McLennan (MMC parent), Marsh Risk (insurance broking), Guy Carpenter/Marsh Re (reinsurance), Mercer (HR/retirement/investment consulting), Oliver Wyman (management consulting, includes Lippincott and NERA), MMC Securities LLC (SEC broker-dealer), MMC Securities Limited (FCA-regulated UK), MMC Securities Ireland Limited (Central Bank of Ireland), MMA Securities LLC, MMA Asset Management LLC (SEC investment adviser), Victor Insurance, McGriff Insurance Services";
+// ── Marsh Entities ──────────────────────────────────────────────────────────────
+const MARSH_ENTITY_LIST = "Marsh (Parent), Marsh Risk (insurance broking), Guy Carpenter/Marsh Re (reinsurance), Mercer (HR/retirement/investment consulting), Oliver Wyman (management consulting, includes Lippincott and NERA), Marsh Securities LLC (SEC broker-dealer), Marsh Securities Limited (FCA-regulated UK), Marsh Securities Ireland Limited (Central Bank of Ireland), Marsh MMA Securities LLC, Marsh MMA Asset Management LLC (SEC investment adviser), Victor Insurance, McGriff Insurance Services";
 
 // ── Device Detection ──────────────────────────────────────────────────────────
 function detectMobile() {
@@ -570,7 +570,7 @@ export default function App() {
     setOpenActions({});
 
     var truncated = reg.text.length > 4000 ? reg.text.slice(0, 4000) + "..." : reg.text;
-    var prompt = "You are a regulatory compliance expert. Analyze the regulation below and respond with ONLY a valid JSON object. No prose, no markdown, no backticks.\n\nREGULATION TEXT:\n" + truncated + "\n\nReturn this exact JSON (values under 40 words except verbatim legislative fields):\n{\"instrumentType\":\"Regulation or Directive\",\"fullName\":\"Full official name\",\"referenceNumber\":\"e.g. 2022/2554/EU\",\"summary\":\"One sentence\",\"jurisdiction\":\"region\",\"impactAreas\":[\"area1\",\"area2\"],\"chapters\":[{\"number\":\"Chapter I\",\"title\":\"title\"}],\"transitionalPeriod\":\"Verbatim text of article titled Transitional Period or N/A\",\"transpositionDate\":\"Verbatim text of article titled Transposition or N/A\",\"repealOfLegislation\":\"Verbatim text of article titled Repeal or N/A\",\"entryIntoForce\":\"Verbatim text of article titled Entry into force or N/A\",\"effectiveDate\":\"date or TBD\",\"deadline\":\"deadline or Ongoing\",\"riskLevel\":\"Critical\",\"overallRisk\":{\"rating\":\"Critical\",\"score\":9,\"summary\":\"sentence\",\"financialExposure\":\"sentence\",\"reputationalExposure\":\"sentence\",\"operationalExposure\":\"sentence\",\"mitigatingFactors\":[\"factor1\"]},\"mmcScope\":[{\"entity\":\"name\",\"inScope\":true,\"reason\":\"sentence\"}],\"controls\":[{\"controlId\":\"CTRL-001\",\"title\":\"Short control name\",\"description\":\"What the control requires\",\"category\":\"Governance or Risk or Compliance or Technology or Operational or Reporting\",\"priority\":\"Immediate or Short-term or Ongoing\",\"owner\":\"Responsible team\",\"steps\":[\"Implementation step 1\",\"Implementation step 2\",\"Implementation step 3\"],\"testingCriteria\":\"How to verify the control is operating effectively\",\"articleReference\":\"Article or Section reference\"}]}\n\nRules: instrumentType exactly Regulation or Directive. chapters top-level only. riskLevel and overallRisk.rating: Critical/High/Medium/Low. overallRisk.score 1-10. Assess ALL MMC entities for mmcScope. priority: Immediate/Short-term/Ongoing. 6-10 controls with 3-5 steps each. controlId must be unique sequential e.g. CTRL-001. Output ONLY raw JSON.";
+    var prompt = "You are a regulatory compliance expert. Analyze the regulation below and respond with ONLY a valid JSON object. No prose, no markdown, no backticks.\n\nREGULATION TEXT:\n" + truncated + "\n\nReturn this exact JSON (values under 40 words except verbatim legislative fields):\n{\"instrumentType\":\"Regulation or Directive\",\"fullName\":\"Full official name\",\"referenceNumber\":\"e.g. 2022/2554/EU\",\"summary\":\"One sentence\",\"jurisdiction\":\"region\",\"impactAreas\":[\"area1\",\"area2\"],\"chapters\":[{\"number\":\"Chapter I\",\"title\":\"title\"}],\"transitionalPeriod\":\"Verbatim text of article titled Transitional Period or N/A\",\"transpositionDate\":\"Verbatim text of article titled Transposition or N/A\",\"repealOfLegislation\":\"Verbatim text of article titled Repeal or N/A\",\"entryIntoForce\":\"Verbatim text of article titled Entry into force or N/A\",\"effectiveDate\":\"date or TBD\",\"deadline\":\"deadline or Ongoing\",\"riskLevel\":\"Critical\",\"overallRisk\":{\"rating\":\"Critical\",\"score\":9,\"summary\":\"sentence\",\"financialExposure\":\"sentence\",\"reputationalExposure\":\"sentence\",\"operationalExposure\":\"sentence\",\"mitigatingFactors\":[\"factor1\"]},\"mmcScope\":[{\"entity\":\"name\",\"inScope\":true,\"reason\":\"sentence\"}],\"controls\":[{\"controlId\":\"CTRL-001\",\"title\":\"Short control name\",\"description\":\"What the control requires\",\"category\":\"Governance or Risk or Compliance or Technology or Operational or Reporting\",\"priority\":\"Immediate or Short-term or Ongoing\",\"owner\":\"Responsible team\",\"steps\":[\"Implementation step 1\",\"Implementation step 2\",\"Implementation step 3\"],\"testingCriteria\":\"How to verify the control is operating effectively\",\"articleReference\":\"Article or Section reference\"}]}\n\nRules: instrumentType exactly Regulation or Directive. chapters top-level only. riskLevel and overallRisk.rating: Critical/High/Medium/Low. overallRisk.score 1-10. Assess ALL Marsh entities for mmcScope. priority: Immediate/Short-term/Ongoing. 6-10 controls with 3-5 steps each. controlId must be unique sequential e.g. CTRL-001. Output ONLY raw JSON.";
 
     try {
       var raw = await apiCall([{ role: "user", content: prompt }]);
@@ -686,10 +686,6 @@ export default function App() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button onClick={scanAllSources} disabled={scanning || !sources.length}
-            style={{ background: C.accent3 + "22", border: "1px solid " + C.accent3 + "66", color: "#a78bfa", padding: "5px 14px", borderRadius: 20, fontSize: 11, letterSpacing: "0.08em", cursor: "pointer", fontFamily: "inherit", fontWeight: "bold", opacity: scanning || !sources.length ? 0.5 : 1 }}>
-            {scanning ? "↻ " : "⟳ "}<span className="hdr-scan-label">{scanning ? "Scanning..." : "Scan All Sources"}</span>
-          </button>
           {totalFound > 0 && !scanning && (
             <button onClick={function() { setShowScanner(true); }}
               style={{ background: C.success + "22", border: "1px solid " + C.success + "44", color: C.success, padding: "5px 14px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: "bold" }}>
@@ -698,7 +694,8 @@ export default function App() {
           )}
           {/* App navigation */}
           <div style={{ display: "flex", gap: 4 }}>
-            <button onClick={function() { setAppView("dashboard"); }} style={{ background: appView === "dashboard" ? C.accent + "22" : "transparent", border: "1px solid " + (appView === "dashboard" ? C.accent : C.border), color: appView === "dashboard" ? C.accent : C.muted, padding: "4px 12px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>📊 Inventory</button>
+            <button onClick={function() { setAppView("dashboard"); }} style={{ background: appView === "dashboard" ? C.accent + "22" : "transparent", border: "1px solid " + (appView === "dashboard" ? C.accent : C.border), color: appView === "dashboard" ? C.accent : C.muted, padding: "4px 12px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>🌐 Dashboard</button>
+            <button onClick={function() { setAppView("inventory"); }} style={{ background: appView === "inventory" ? C.accent + "22" : "transparent", border: "1px solid " + (appView === "inventory" ? C.accent : C.border), color: appView === "inventory" ? C.accent : C.muted, padding: "4px 12px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>📋 Inventory</button>
             <button onClick={function() { setAppView("analyze"); }} style={{ background: appView === "analyze" ? C.accent + "22" : "transparent", border: "1px solid " + (appView === "analyze" ? C.accent : C.border), color: appView === "analyze" ? C.accent : C.muted, padding: "4px 12px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>🔬 Analyse</button>
           </div>
           <div style={{ background: C.accent + "22", border: "1px solid " + C.accent + "44", color: C.accent, padding: "4px 12px", borderRadius: 20, fontSize: 11 }}>⬡ AI-Powered</div>
@@ -893,7 +890,7 @@ export default function App() {
                 {["summary","mmc","controls","source"].map(function(tab) {
                   return (
                     <button key={tab} className={"tab " + (activeTab === tab ? "ton" : "toff")} onClick={function() { setActiveTab(tab); }}>
-                      {tab === "summary" ? "📋 Summary" : tab === "mmc" ? ("🏢 MMC Scope (" + (a.mmcScope ? a.mmcScope.length : 0) + ")") : tab === "controls" ? ("⚡ Controls (" + (a.controls ? a.controls.length : 0) + ")") : "📄 Source"}
+                      {tab === "summary" ? "📋 Summary" : tab === "mmc" ? ("🏢 Marsh Scope (" + (a.mmcScope ? a.mmcScope.length : 0) + ")") : tab === "controls" ? ("⚡ Controls (" + (a.controls ? a.controls.length : 0) + ")") : "📄 Source"}
                     </button>
                   );
                 })}
@@ -1104,8 +1101,8 @@ export default function App() {
 
               {activeTab === "mmc" && (
                 <div>
-                  <div style={sHead}>◈ MMC Entity Scope Assessment</div>
-                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 20, lineHeight: 1.6 }}>AI-assessed scope across Marsh McLennan group entities. Always validate with legal counsel.</div>
+                  <div style={sHead}>◈ Marsh Entity Scope Assessment</div>
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 20, lineHeight: 1.6 }}>AI-assessed scope across Marsh group entities. Always validate with legal counsel.</div>
                   <div style={{ marginBottom: 20 }}>
                     <div style={{ fontSize: 10, letterSpacing: "0.15em", color: C.critical, textTransform: "uppercase", marginBottom: 10 }}>{"● In Scope (" + (a.mmcScope ? a.mmcScope.filter(function(e) { return e.inScope; }).length : 0) + " entities)"}</div>
                     {a.mmcScope && a.mmcScope.filter(function(e) { return e.inScope; }).map(function(e, i) {
@@ -1146,27 +1143,6 @@ export default function App() {
       {appView === "dashboard" && (
         <div style={{ padding: "24px 32px", overflowY: "auto", minHeight: "calc(100vh - 65px)" }}>
           {(function() {
-            var filtered = REGULATIONS.filter(function(r) {
-              if (invFilter.marshOnly && !r.marshRelevant) return false;
-              if (invFilter.region !== "All" && r.region !== invFilter.region) return false;
-              if (invFilter.domain !== "All" && r.domain !== invFilter.domain) return false;
-              if (invFilter.status !== "All" && r.status !== invFilter.status) return false;
-              if (invFilter.search) {
-                var q = invFilter.search.toLowerCase();
-                return r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.summary.toLowerCase().includes(q);
-              }
-              return true;
-            });
-
-            var ctrlFiltered = CONTROLS_LIBRARY.filter(function(c) {
-              if (ctrlFilter.category !== "All" && c.category !== ctrlFilter.category) return false;
-              if (ctrlFilter.search) {
-                var q = ctrlFilter.search.toLowerCase();
-                return c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q);
-              }
-              return true;
-            });
-
             var byRegion = {};
             var byDomain = {};
             var byStatus = {};
@@ -1178,16 +1154,28 @@ export default function App() {
             var totalMarsh = REGULATIONS.filter(function(r) { return r.marshRelevant; }).length;
             var totalAll = REGULATIONS.length;
             var totalControls = CONTROLS_LIBRARY.length;
+            var domColors = { "Financial Services": C.accent, "Data Privacy": "#a78bfa", "ESG": C.success, "Cybersecurity": C.warning, "AML / Financial Crime": C.critical, "Insurance": "#06b6d4", "Legal": "#f97316", "Compliance": "#8b5cf6" };
 
-            var domColors = { "Financial Services": C.accent, "Data Privacy": "#a78bfa", "ESG": C.success, "Cybersecurity": C.warning, "AML / Financial Crime": C.critical, "Insurance": "#06b6d4", "Legal": "#f97316", "Compliance": "#8b5cf6", "Accessibility": "#ec4899", "Alternative Communications": "#14b8a6" };
+            // Map region data with coordinates
+            var regionMap = [
+              { name: "EU", x: 490, y: 155, count: byRegion["EU"] || 0, color: C.accent },
+              { name: "UK", x: 455, y: 140, count: byRegion["UK"] || 0, color: "#06b6d4" },
+              { name: "US", x: 200, y: 180, count: byRegion["US"] || 0, color: C.warning },
+              { name: "Canada", x: 195, y: 130, count: byRegion["Canada"] || 0, color: "#f97316" },
+              { name: "LATAM", x: 240, y: 280, count: byRegion["LATAM"] || 0, color: "#ec4899" },
+              { name: "APAC", x: 730, y: 200, count: byRegion["APAC"] || 0, color: C.success },
+              { name: "Middle East", x: 570, y: 210, count: byRegion["Middle East"] || 0, color: "#f59e0b" },
+              { name: "Africa", x: 510, y: 290, count: byRegion["Africa"] || 0, color: "#a78bfa" },
+              { name: "Global", x: 400, y: 100, count: byRegion["Global"] || 0, color: C.muted },
+            ];
 
             return (
               <div>
                 {/* Summary cards */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 28 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 24 }}>
                   {[
-                    { label: "Total Regulations", value: totalAll, sub: "in inventory", color: C.accent },
-                    { label: "Marsh Relevant", value: totalMarsh, sub: "in scope for MMC", color: C.success },
+                    { label: "Total Regulations", value: totalAll, sub: "in global inventory", color: C.accent },
+                    { label: "Marsh Relevant", value: totalMarsh, sub: "in scope for Marsh", color: C.success },
                     { label: "Compliance Controls", value: totalControls, sub: "in controls library", color: "#a78bfa" },
                     { label: "Jurisdictions", value: REGIONS.length, sub: "regions covered", color: C.warning },
                   ].map(function(card) {
@@ -1201,24 +1189,109 @@ export default function App() {
                   })}
                 </div>
 
-                {/* Domain breakdown */}
-                <div style={{ marginBottom: 28 }}>
-                  <div style={{ fontSize: 10, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 14 }}>◈ Marsh-Relevant Regulations by Domain</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 8 }}>
-                    {Object.keys(byDomain).sort(function(a,b) { return byDomain[b]-byDomain[a]; }).map(function(domain) {
-                      var dc = domColors[domain] || C.muted;
+                {/* Global Map */}
+                <div style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 12, padding: "20px 24px", marginBottom: 24 }}>
+                  <div style={{ fontSize: 10, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 16 }}>◈ Global Regulatory Coverage</div>
+                  <div style={{ position: "relative", width: "100%", paddingBottom: "42%" }}>
+                    <svg viewBox="0 0 900 380" xmlns="http://www.w3.org/2000/svg" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}>
+                      {/* Ocean background */}
+                      <rect width="900" height="380" fill="#0a0f1a" rx="8"/>
+                      {/* Simplified world continents */}
+                      {/* North America */}
+                      <path d="M 80 80 L 180 70 L 280 90 L 300 140 L 270 200 L 240 230 L 200 240 L 160 220 L 120 180 L 90 140 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
+                      {/* South America */}
+                      <path d="M 200 250 L 260 240 L 290 270 L 280 350 L 240 370 L 200 350 L 185 310 L 190 270 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
+                      {/* Europe */}
+                      <path d="M 420 90 L 520 80 L 545 110 L 530 150 L 490 170 L 450 160 L 420 140 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
+                      {/* Africa */}
+                      <path d="M 450 170 L 560 165 L 580 200 L 570 310 L 520 350 L 470 330 L 445 280 L 440 220 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
+                      {/* Middle East */}
+                      <path d="M 545 160 L 620 155 L 640 200 L 610 230 L 565 225 L 545 195 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
+                      {/* Asia */}
+                      <path d="M 600 60 L 820 70 L 850 130 L 830 200 L 780 220 L 700 210 L 640 190 L 615 160 L 600 110 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
+                      {/* Australia */}
+                      <path d="M 720 270 L 820 260 L 840 310 L 800 340 L 740 330 L 710 300 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
+                      {/* UK island */}
+                      <path d="M 435 105 L 455 100 L 460 125 L 440 130 Z" fill="#1e2d4a" stroke="#2a3d5a" strokeWidth="1"/>
+
+                      {/* Region bubbles */}
+                      {regionMap.map(function(r) {
+                        if (r.count === 0) return null;
+                        var radius = Math.max(14, Math.min(32, 10 + r.count * 1.8));
+                        return (
+                          <g key={r.name} style={{ cursor: "pointer" }} onClick={function() { setAppView("inventory"); setInvFilter(function(f) { return Object.assign({}, f, { region: r.name }); }); }}>
+                            <circle cx={r.x} cy={r.y} r={radius + 4} fill={r.color + "15"} />
+                            <circle cx={r.x} cy={r.y} r={radius} fill={r.color + "33"} stroke={r.color} strokeWidth="1.5"/>
+                            <text x={r.x} y={r.y - 2} textAnchor="middle" fill={r.color} fontSize="11" fontWeight="bold" fontFamily="monospace">{r.count}</text>
+                            <text x={r.x} y={r.y + 12} textAnchor="middle" fill={r.color} fontSize="7" fontFamily="monospace">{r.name}</text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+                  <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 12 }}>
+                    {regionMap.filter(function(r) { return r.count > 0; }).map(function(r) {
                       return (
-                        <div key={domain} style={{ background: C.panel, border: "1px solid " + dc + "33", borderRadius: 8, padding: "12px 14px", cursor: "pointer" }}
-                          onClick={function() { setInvFilter(function(f) { return Object.assign({}, f, { domain: domain }); }); setDashTab("inventory"); }}>
-                          <div style={{ fontSize: 18, fontWeight: "bold", color: dc, lineHeight: 1, marginBottom: 4 }}>{byDomain[domain]}</div>
-                          <div style={{ fontSize: 10, color: C.text, lineHeight: 1.3 }}>{domain}</div>
+                        <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}
+                          onClick={function() { setAppView("inventory"); setInvFilter(function(f) { return Object.assign({}, f, { region: r.name }); }); }}>
+                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: r.color }}/>
+                          <span style={{ fontSize: 10, color: C.muted }}>{r.name} <span style={{ color: r.color, fontWeight: "bold" }}>{r.count}</span></span>
                         </div>
                       );
                     })}
                   </div>
                 </div>
 
-                {/* Tabs: Inventory / Controls */}
+                {/* Domain breakdown */}
+                <div>
+                  <div style={{ fontSize: 10, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 14 }}>◈ Marsh-Relevant Regulations by Domain</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8 }}>
+                    {Object.keys(byDomain).sort(function(a,b) { return byDomain[b]-byDomain[a]; }).map(function(domain) {
+                      var dc = domColors[domain] || C.muted;
+                      return (
+                        <div key={domain} style={{ background: C.panel, border: "1px solid " + dc + "33", borderRadius: 8, padding: "14px 16px", cursor: "pointer", display: "flex", alignItems: "center", gap: 12 }}
+                          onClick={function() { setAppView("inventory"); setInvFilter(function(f) { return Object.assign({}, f, { domain: domain }); }); }}>
+                          <div style={{ fontSize: 22, fontWeight: "bold", color: dc, lineHeight: 1, flexShrink: 0 }}>{byDomain[domain]}</div>
+                          <div style={{ fontSize: 11, color: C.text, lineHeight: 1.3 }}>{domain}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Inventory View */}
+      {appView === "inventory" && (
+        <div style={{ padding: "24px 32px", overflowY: "auto", minHeight: "calc(100vh - 65px)" }}>
+          {(function() {
+            var filtered = REGULATIONS.filter(function(r) {
+              if (invFilter.marshOnly && !r.marshRelevant) return false;
+              if (invFilter.region !== "All" && r.region !== invFilter.region) return false;
+              if (invFilter.domain !== "All" && r.domain !== invFilter.domain) return false;
+              if (invFilter.status !== "All" && r.status !== invFilter.status) return false;
+              if (invFilter.search) {
+                var q = invFilter.search.toLowerCase();
+                return r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.summary.toLowerCase().includes(q);
+              }
+              return true;
+            });
+            var ctrlFiltered = CONTROLS_LIBRARY.filter(function(c) {
+              if (ctrlFilter.category !== "All" && c.category !== ctrlFilter.category) return false;
+              if (ctrlFilter.search) {
+                var q = ctrlFilter.search.toLowerCase();
+                return c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q);
+              }
+              return true;
+            });
+            var domColors = { "Financial Services": C.accent, "Data Privacy": "#a78bfa", "ESG": C.success, "Cybersecurity": C.warning, "AML / Financial Crime": C.critical, "Insurance": "#06b6d4", "Legal": "#f97316", "Compliance": "#8b5cf6" };
+
+            return (
+              <div>
+                {/* Tabs */}
                 <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid " + C.border, paddingBottom: 10 }}>
                   <button className={"tab " + (dashTab === "inventory" ? "ton" : "toff")} onClick={function() { setDashTab("inventory"); }}>📋 Regulation Inventory ({filtered.length})</button>
                   <button className={"tab " + (dashTab === "controls" ? "ton" : "toff")} onClick={function() { setDashTab("controls"); }}>⚡ Controls Library ({CONTROLS_LIBRARY.length})</button>
@@ -1226,7 +1299,6 @@ export default function App() {
 
                 {dashTab === "inventory" && (
                   <div>
-                    {/* Filters */}
                     <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
                       <input type="text" placeholder="Search regulations..." value={invFilter.search}
                         onChange={function(e) { setInvFilter(function(f) { return Object.assign({}, f, { search: e.target.value }); }); }}
@@ -1249,15 +1321,10 @@ export default function App() {
                         {invFilter.marshOnly ? "✓ Marsh Relevant" : "All Regulations"}
                       </button>
                       <button onClick={function() { setInvFilter({ region: "All", domain: "All", status: "All", marshOnly: true, search: "" }); }}
-                        style={{ background: "transparent", border: "1px solid " + C.border, color: C.muted, padding: "5px 10px", borderRadius: 6, cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>
-                        ↺ Reset
-                      </button>
+                        style={{ background: "transparent", border: "1px solid " + C.border, color: C.muted, padding: "5px 10px", borderRadius: 6, cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>↺ Reset</button>
                     </div>
-
-                    {/* Regulation table */}
                     <div style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 10, overflow: "hidden" }}>
-                      {/* Header */}
-                      <div style={{ display: "grid", gridTemplateColumns: "80px 1fr 120px 100px 90px 80px 90px", gap: 0, padding: "10px 14px", borderBottom: "1px solid " + C.border, background: "#0a0f1a" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "80px 1fr 120px 100px 100px 80px 90px", gap: 0, padding: "10px 14px", borderBottom: "1px solid " + C.border, background: "#0a0f1a" }}>
                         {["ID","Regulation","Reference","Region","Domain","Status",""].map(function(h) {
                           return <div key={h} style={{ fontSize: 9, color: C.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>{h}</div>;
                         })}
@@ -1267,7 +1334,7 @@ export default function App() {
                         var sc = { "In Force": C.success, "Proposed": C.warning, "Upcoming": C.accent }[reg.status] || C.muted;
                         var dc = domColors[reg.domain] || C.muted;
                         return (
-                          <div key={reg.id} className="hov" style={{ display: "grid", gridTemplateColumns: "80px 1fr 120px 100px 90px 80px 90px", gap: 0, padding: "10px 14px", borderBottom: "1px solid " + C.border, alignItems: "center" }}>
+                          <div key={reg.id} className="hov" style={{ display: "grid", gridTemplateColumns: "80px 1fr 120px 100px 100px 80px 90px", gap: 0, padding: "10px 14px", borderBottom: "1px solid " + C.border, alignItems: "center" }}>
                             <div style={{ fontSize: 9, color: C.accent, fontWeight: "bold" }}>{reg.id}</div>
                             <div>
                               <div style={{ fontSize: 11, fontWeight: "bold", color: C.text, marginBottom: 2 }}>{reg.name}</div>
@@ -1276,15 +1343,13 @@ export default function App() {
                             <div style={{ fontSize: 9, color: C.muted }}>{reg.reference}</div>
                             <div style={{ fontSize: 9, color: C.muted }}>{reg.region}</div>
                             <div style={{ fontSize: 9, color: dc, fontWeight: "bold" }}>{reg.domain}</div>
-                            <div>
-                              <span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 3, background: sc + "22", border: "1px solid " + sc + "44", color: sc, fontWeight: "bold", whiteSpace: "nowrap" }}>{reg.status}</span>
-                            </div>
+                            <div><span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 3, background: sc + "22", border: "1px solid " + sc + "44", color: sc, fontWeight: "bold", whiteSpace: "nowrap" }}>{reg.status}</span></div>
                             <div style={{ display: "flex", gap: 5 }}>
                               <a href={reg.source} target="_blank" rel="noopener noreferrer"
-                                style={{ fontSize: 9, color: C.muted, textDecoration: "none", background: C.border, padding: "2px 7px", borderRadius: 3 }}>↗ Source</a>
+                                style={{ fontSize: 9, color: C.muted, textDecoration: "none", background: C.border, padding: "2px 7px", borderRadius: 3 }}>↗</a>
                               <button onClick={function() {
                                 setInputTitle(reg.name);
-                                setInputText(reg.name + " (" + reg.reference + "). " + reg.summary + " Region: " + reg.region + ". Domain: " + reg.domain + ". Status: " + reg.status + ". Source: " + reg.source);
+                                setInputText(reg.name + " (" + reg.reference + "). " + reg.summary + " Region: " + reg.region + ". Domain: " + reg.domain + ". Effective: " + reg.effectiveDate + ". Source: " + reg.source);
                                 setAppView("analyze");
                               }} style={{ fontSize: 9, color: C.accent, background: C.accent + "18", border: "1px solid " + C.accent + "33", padding: "2px 7px", borderRadius: 3, cursor: "pointer", fontFamily: "inherit" }}>Analyse</button>
                             </div>
@@ -1297,7 +1362,6 @@ export default function App() {
 
                 {dashTab === "controls" && (
                   <div>
-                    {/* Controls filters */}
                     <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
                       <input type="text" placeholder="Search controls..." value={ctrlFilter.search}
                         onChange={function(e) { setCtrlFilter(function(f) { return Object.assign({}, f, { search: e.target.value }); }); }}
@@ -1305,7 +1369,7 @@ export default function App() {
                       <select value={ctrlFilter.category}
                         onChange={function(e) { var v = e.target.value; setCtrlFilter(function(f) { return Object.assign({}, f, { category: v }); }); }}
                         style={{ background: "#0a0f1a", border: "1px solid " + C.border, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "6px 10px", outline: "none" }}>
-                        {["All","Data Privacy","Cybersecurity","AML / Financial Crime","Financial Services","Compliance","ESG","Legal","Alternative Communications","Accessibility"].map(function(o) { return <option key={o} value={o}>{o}</option>; })}
+                        {["All","Data Privacy","Cybersecurity","AML / Financial Crime","Financial Services","Compliance","ESG","Legal"].map(function(o) { return <option key={o} value={o}>{o}</option>; })}
                       </select>
                       <button onClick={function() {
                         var payload = { exportedAt: new Date().toISOString(), totalControls: CONTROLS_LIBRARY.length, controls: CONTROLS_LIBRARY };
@@ -1315,14 +1379,12 @@ export default function App() {
                         link.href = url; link.download = "marsh-controls-library.json";
                         link.click(); URL.revokeObjectURL(url);
                       }} style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit", fontWeight: "bold" }}>
-                        ↓ Export All Controls (JSON)
+                        ↓ Export Controls (JSON)
                       </button>
                     </div>
-
-                    {/* Controls list */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                       {ctrlFiltered.map(function(ctrl) {
-                        var catColor = { "Data Privacy": "#a78bfa", "Cybersecurity": C.warning, "AML / Financial Crime": C.critical, "Financial Services": C.accent, "Compliance": "#8b5cf6", "ESG": C.success, "Legal": "#f97316", "Alternative Communications": "#14b8a6", "Accessibility": "#ec4899" }[ctrl.category] || C.muted;
+                        var catColor = { "Data Privacy": "#a78bfa", "Cybersecurity": C.warning, "AML / Financial Crime": C.critical, "Financial Services": C.accent, "Compliance": "#8b5cf6", "ESG": C.success, "Legal": "#f97316" }[ctrl.category] || C.muted;
                         var pc = ctrl.priority === "Immediate" ? C.critical : ctrl.priority === "Short-term" ? C.warning : C.success;
                         return (
                           <div key={ctrl.controlId} style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 9, padding: "14px 18px", display: "flex", gap: 14, alignItems: "flex-start" }}>
@@ -1334,10 +1396,10 @@ export default function App() {
                                 <span style={{ fontSize: 8, padding: "2px 7px", borderRadius: 3, background: pc + "22", border: "1px solid " + pc + "44", color: pc, fontWeight: "bold" }}>{ctrl.priority}</span>
                               </div>
                               <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, marginBottom: 6 }}>{ctrl.description}</div>
-                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                                 <span style={{ fontSize: 9, color: C.muted }}>Owner: {ctrl.owner}</span>
                                 <span style={{ fontSize: 9, color: C.muted }}>|</span>
-                                <span style={{ fontSize: 9, color: C.muted }}>Source regs: {ctrl.regulations.join(", ")}</span>
+                                <span style={{ fontSize: 9, color: C.muted }}>Regs: {ctrl.regulations.join(", ")}</span>
                               </div>
                               <div style={{ marginTop: 6, fontSize: 9, color: C.success, background: C.success + "11", border: "1px solid " + C.success + "22", borderRadius: 4, padding: "3px 8px", display: "inline-block" }}>✓ {ctrl.testingCriteria}</div>
                             </div>
