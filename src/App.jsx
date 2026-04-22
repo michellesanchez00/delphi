@@ -1,383 +1,399 @@
-import { useState, useMemo } from "react";
-import { REGULATIONS, CONTROLS_LIBRARY, DOMAINS, REGIONS, MARSH_ENTITIES } from "./regulatoryData.js";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { REGULATIONS, CONTROLS_LIBRARY, DOMAINS, REGIONS, MARSH_ENTITIES } from "./regulatoryData";
 
-// ── Marsh Entities ──────────────────────────────────────────────────────────────
-const MARSH_ENTITY_LIST = "Marsh (Parent), Marsh Risk (insurance broking), Guy Carpenter/Marsh Re (reinsurance), Mercer (HR/retirement/investment consulting), Oliver Wyman (management consulting, includes Lippincott and NERA), Marsh Securities LLC (SEC broker-dealer), Marsh Securities Limited (FCA-regulated UK), Marsh Securities Ireland Limited (Central Bank of Ireland), Marsh MMA Securities LLC, Marsh MMA Asset Management LLC (SEC investment adviser), Victor Insurance, McGriff Insurance Services";
-
-// ── Device Detection ──────────────────────────────────────────────────────────
-function detectMobile() {
-  // Check actual device user agent — not screen width
-  // This works correctly even inside narrow iframes like Claude artifacts
-  var ua = navigator.userAgent || navigator.vendor || window.opera || "";
-  var isMobileUA = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i.test(ua);
-  var isTouchOnly = (navigator.maxTouchPoints > 1) && !window.matchMedia("(pointer: fine)").matches;
-  return isMobileUA || isTouchOnly;
-}
-
-var IS_MOBILE = detectMobile();
-
-// Apply body class once so CSS can target it
-if (IS_MOBILE) {
-  document.body.classList.add("is-mobile");
-} else {
-  document.body.classList.remove("is-mobile");
-}
-
-// ── Storage & TTL ─────────────────────────────────────────────────────────────
-// Regulations are stored permanently until manually deleted
-const TTL_DEFAULT = null;  // No expiry
-const TTL_INSCOPE = null;  // No expiry
-
-function saveRegs(regs) {
-  try { localStorage.setItem("delphi_regs", JSON.stringify(regs)); } catch(e) {}
-}
-
-function loadRegs() {
-  try {
-    var stored = localStorage.getItem("delphi_regs");
-    if (!stored) return [];
-    var regs = JSON.parse(stored);
-    var now = Date.now();
-    // Purge expired regulations
-    return regs.filter(function(r) {
-      var ttl = r.inScope ? TTL_INSCOPE : TTL_DEFAULT;
-      return (now - r.savedAt) < ttl;
-    });
-  } catch(e) { return []; }
-}
-
-
-
-// Collect all controls from all saved regs (excluding current)
-function getAllControls(regs, excludeId) {
-  var controls = [];
-  regs.forEach(function(r) {
-    if (r.id === excludeId || !r.analysis) return;
-    (r.analysis.controls || []).forEach(function(c) {
-      controls.push({ regId: r.id, regTitle: r.title, controlId: c.controlId, title: c.title });
-    });
-  });
-  return controls;
-}
-
-function isDuplicate(controlTitle, allControls) {
-  var t = controlTitle.toLowerCase().trim();
-  return allControls.find(function(c) {
-    var sim = c.title.toLowerCase().trim();
-    // Simple similarity: check if 60%+ of words match
-    var words = t.split(/\s+/);
-    var matches = words.filter(function(w) { return w.length > 3 && sim.includes(w); });
-    return matches.length >= Math.ceil(words.length * 0.6);
-  });
-}
-
-const C = {
-  bg: "#0a0f1a", panel: "#0f1628", border: "#1e2d4a",
-  accent: "#00d4ff", accent3: "#7c3aed", text: "#e2e8f0",
-  muted: "#64748b", success: "#10b981", warning: "#f59e0b", critical: "#ef4444",
-};
-
-const DEFAULT_SOURCES = [
-  { id: 1, icon: "🇪🇺", label: "EC Financial Services", url: "https://finance.ec.europa.eu/regulation-and-supervision/financial-services-legislation_en", description: "EU financial services legislation" },
-  { id: 2, icon: "🏛", label: "EP Legislative Observatory", url: "https://oeil.secure.europarl.europa.eu/oeil/home/home.do", description: "European Parliament legislative tracking" },
-  { id: 3, icon: "⚖", label: "EU Law Tracker", url: "https://law-tracker.europa.eu/homepage", description: "Track EU law through the legislative process" },
-];
-
-const SAMPLE_REGS = [
-  { title: "EU AI Act — Article 9 Risk Management", text: "Article 9 of the EU AI Act mandates that providers of high-risk AI systems must establish, implement, document and maintain a risk management system. This system shall consist of a continuous iterative process run throughout the entire lifecycle of a high-risk AI system. It shall ensure that risks associated with AI systems are identified, estimated, and evaluated. Where reasonably foreseeable misuse of the AI system could lead to risks, these shall also be evaluated. Providers must test their AI systems prior to placing them on the market or putting them into service. Compliance deadline: August 2026." },
-  { title: "SEC Cybersecurity Disclosure Rule", text: "The Securities and Exchange Commission adopted new rules requiring registrants to disclose material cybersecurity incidents they experience and to disclose on an annual basis material information regarding their cybersecurity risk management, strategy, and governance. Registrants must disclose any cybersecurity incident determined to be material on Form 8-K within four business days of determination. The rule also requires annual disclosures on Form 10-K. Effective date: December 2023 for large accelerated filers, June 2024 for smaller reporting companies." },
-];
-
-
-function riskColor(level) {
-  return { Critical: C.critical, High: C.warning, Medium: C.accent, Low: C.success }[level] || C.muted;
-}
-
-function priorityStyle(p) {
-  return {
-    Immediate: { background: "#ef444422", border: "1px solid #ef444444", color: C.critical },
-    "Short-term": { background: "#f59e0b22", border: "1px solid #f59e0b44", color: C.warning },
-    Ongoing: { background: "#10b98122", border: "1px solid #10b98144", color: C.success },
-  }[p] || { background: C.border, color: C.muted };
-}
-
-const iStyle = {
-  width: "100%", background: "#0a0f1acc", border: "1px solid " + C.border,
-  borderRadius: 7, color: C.text, fontFamily: "inherit", fontSize: 12,
-  padding: "8px 10px", outline: "none", boxSizing: "border-box",
-};
-
-// ── Proxy URL — replace with your Vercel deployment URL after deploying ──────
 const PROXY_URL = "https://delphi-proxy.vercel.app/api/claude";
-// ─────────────────────────────────────────────────────────────────────────────
+const SESSION_KEY = "delphi_auth";
+const SCOPE_KEY = "delphi_scope";
+const ANALYSIS_KEY = "delphi_analyses";
+const CUSTOM_REGS_KEY = "delphi_custom_regs";
 
-async function apiCall(messages, maxTokens, useSearch) {
-  const body = {
-    model: "claude-sonnet-4-20250514",
-    max_tokens: maxTokens || 4000,
-    messages: messages,
+// ── helpers ────────────────────────────────────────────────────────────────────
+const formatDeadline = (iso) => {
+  if (!iso) return null;
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+};
+const daysUntil = (iso) => {
+  if (!iso) return null;
+  const now = new Date(); now.setHours(0,0,0,0);
+  const d = new Date(iso + "T00:00:00");
+  return Math.round((d - now) / 86400000);
+};
+const urgencyColor = (days) => {
+  if (days === null) return "var(--text-muted)";
+  if (days < 0) return "#ef4444";
+  if (days <= 90) return "#f59e0b";
+  if (days <= 180) return "#3b82f6";
+  return "#10b981";
+};
+const regionFlag = { EU:"🇪🇺", US:"🇺🇸", UK:"🇬🇧", APAC:"🌏", Global:"🌐", Canada:"🇨🇦", LATAM:"🌎", "Middle East":"🕌", Africa:"🌍" };
+const statusBadge = (s) => {
+  const map = { "In Force":"green","Proposed":"amber","Repealed":"red","Amended":"blue","Pending":"gray","Analyzed":"indigo" };
+  return map[s] || "gray";
+};
+const scopeBadge = (s) => ({ "In Scope":"green","Out of Scope":"red","Pending":"amber" }[s] || "gray");
+
+// ── STORAGE ────────────────────────────────────────────────────────────────────
+const storage = {
+  get: (k, def = null) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+// ── BADGE ─────────────────────────────────────────────────────────────────────
+function Badge({ color, children, small }) {
+  const colors = {
+    green: "bg-emerald-100 text-emerald-800 border-emerald-200",
+    amber: "bg-amber-100 text-amber-800 border-amber-200",
+    red: "bg-red-100 text-red-800 border-red-200",
+    blue: "bg-blue-100 text-blue-800 border-blue-200",
+    indigo: "bg-indigo-100 text-indigo-800 border-indigo-200",
+    gray: "bg-gray-100 text-gray-700 border-gray-200",
   };
-  if (useSearch) {
-    body.tools = [{ type: "web_search_20250305", name: "web_search" }];
-  }
-  const res = await fetch(PROXY_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (data.error) {
-    const msg = data.error.message || JSON.stringify(data.error);
-    if (msg.includes("exceeded_limit") || JSON.stringify(data.error).includes("exceeded_limit")) {
-      throw new Error("LIMIT_EXCEEDED");
-    }
-    throw new Error(msg);
-  }
-  return (data.content || []).filter(function(b) { return b.type === "text"; }).map(function(b) { return b.text; }).join("");
-}
-
-function limitMsg() {
-  return "Claude.ai usage limit reached. Please wait a few hours for it to reset, or paste regulation text manually. This limit will not apply once deployed with your own Anthropic API key.";
-}
-
-// ── ActionCard ────────────────────────────────────────────────────────────────
-
-function ActionCard(props) {
-  var action = props.action;
-  var index = props.index;
-  var open = props.open;
-  var onToggle = props.onToggle;
   return (
-    <div style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 10, marginBottom: 10, overflow: "hidden" }}>
-      <div style={{ padding: "14px 18px", display: "flex", gap: 14, alignItems: "flex-start", cursor: "pointer" }} onClick={onToggle}>
-        <div style={{ background: C.accent + "22", border: "1px solid " + C.accent + "44", color: C.accent, width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: "bold", flexShrink: 0 }}>
-          {index + 1}
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: "bold", marginBottom: 4, color: C.text }}>{action.title}</div>
-          <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.6, marginBottom: 8 }}>{action.description}</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: "bold", ...priorityStyle(action.priority) }}>{action.priority}</span>
-            {action.owner && <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, background: C.border, color: C.muted }}>{"Owner: " + action.owner}</span>}
-          </div>
-        </div>
-        <span style={{ color: C.muted, fontSize: 11, flexShrink: 0, marginTop: 6, display: "inline-block", transform: open ? "rotate(180deg)" : "none" }}>▼</span>
-      </div>
-      {open && (
-        <div style={{ borderTop: "1px solid " + C.border, padding: "14px 18px 18px 60px" }}>
-          {action.steps && action.steps.length > 0 && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 10, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 10 }}>◈ How To Proceed</div>
-              {action.steps.map(function(step, i) {
-                return (
-                  <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 }}>
-                    <div style={{ background: C.accent3 + "33", border: "1px solid " + C.accent3 + "55", color: "#a78bfa", width: 20, height: 20, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: "bold", flexShrink: 0, marginTop: 1 }}>{i + 1}</div>
-                    <div style={{ fontSize: 12, color: C.text, lineHeight: 1.6 }}>{String(step).replace(/^Step \d+:\s*/i, "")}</div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {action.successCriteria && (
-            <div style={{ background: C.success + "11", border: "1px solid " + C.success + "33", borderRadius: 7, padding: "10px 14px", display: "flex", gap: 10 }}>
-              <span style={{ color: C.success, flexShrink: 0 }}>✓</span>
-              <div>
-                <div style={{ fontSize: 10, letterSpacing: "0.12em", color: C.success, textTransform: "uppercase", marginBottom: 4 }}>Done When</div>
-                <div style={{ fontSize: 12, color: C.text, lineHeight: 1.5 }}>{action.successCriteria}</div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+    <span className={`inline-flex items-center border font-medium rounded-full ${small ? "text-xs px-2 py-0.5" : "text-xs px-2.5 py-1"} ${colors[color] || colors.gray}`}>
+      {children}
+    </span>
   );
 }
 
-// ── SourcesModal ──────────────────────────────────────────────────────────────
-
-function SourcesModal(props) {
-  var sources = props.sources;
-  var setSources = props.setSources;
-  var onClose = props.onClose;
-  var [editing, setEditing] = useState(null);
-  var [form, setForm] = useState({ icon: "🔗", label: "", url: "", description: "" });
-
-  function startEdit(src) {
-    setEditing(src.id);
-    setForm({ icon: src.icon || "🔗", label: src.label, url: src.url, description: src.description || "" });
-  }
-  function cancelEdit() { setEditing(null); setForm({ icon: "🔗", label: "", url: "", description: "" }); }
-  function save() {
-    if (editing) {
-      setSources(function(prev) { return prev.map(function(s) { return s.id === editing ? Object.assign({}, s, form) : s; }); });
-    } else {
-      setSources(function(prev) { return prev.concat([Object.assign({ id: Date.now() }, form)]); });
-    }
-    cancelEdit();
-  }
-  var canSave = form.label.trim() && form.url.trim();
-
+// ── LOGIN ─────────────────────────────────────────────────────────────────────
+function Login({ onLogin }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const handle = (e) => {
+    e.preventDefault();
+    if (pw === "Regscan") { onLogin(); }
+    else { setErr("Incorrect password."); }
+  };
   return (
-    <div className="modal-bg" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.78)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
-      onClick={function(e) { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-inner" style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 14, width: "100%", maxWidth: 600, maxHeight: "82vh", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "18px 24px", borderBottom: "1px solid " + C.border, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-8">
+          <div className="text-3xl font-bold text-white tracking-tight mb-1">DELPHI</div>
+          <div className="text-sm text-gray-400">Marsh Regulatory Intelligence Platform</div>
+        </div>
+        <form onSubmit={handle} className="bg-gray-900 border border-gray-800 rounded-2xl p-8 space-y-4">
           <div>
-            <div style={{ fontSize: 13, fontWeight: "bold", color: C.text }}>🔗 Manage Monitored Sources</div>
-            <div style={{ fontSize: 10, color: C.muted, marginTop: 3 }}>Add, edit or remove regulation websites to monitor</div>
+            <label className="block text-xs text-gray-400 mb-1.5 font-medium uppercase tracking-wider">Password</label>
+            <input
+              type="password" value={pw} onChange={e => { setPw(e.target.value); setErr(""); }}
+              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+              placeholder="Enter access code" autoFocus
+            />
+            {err && <p className="text-red-400 text-xs mt-1.5">{err}</p>}
           </div>
-          <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.muted, fontSize: 20, cursor: "pointer" }}>✕</button>
-        </div>
-
-        <div style={{ flex: 1, overflowY: "auto", padding: "16px 24px" }}>
-          {sources.map(function(src) {
-            return (
-              <div key={src.id} style={{ background: "#0a0f1a", border: "1px solid " + (editing === src.id ? C.accent + "66" : C.border), borderRadius: 8, padding: "12px 14px", marginBottom: 8, display: "flex", alignItems: "center", gap: 12 }}>
-                <span style={{ fontSize: 20, flexShrink: 0 }}>{src.icon}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: "bold", color: C.text, marginBottom: 2 }}>{src.label}</div>
-                  <div style={{ fontSize: 10, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{src.url}</div>
-                  {src.description && <div style={{ fontSize: 10, color: C.muted, marginTop: 2, fontStyle: "italic" }}>{src.description}</div>}
-                </div>
-                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                  <button onClick={function() { startEdit(src); }} style={{ background: C.accent + "18", border: "1px solid " + C.accent + "44", color: C.accent, borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>✎ Edit</button>
-                  <button onClick={function() { setSources(function(prev) { return prev.filter(function(s) { return s.id !== src.id; }); }); if (editing === src.id) cancelEdit(); }} style={{ background: C.critical + "18", border: "1px solid " + C.critical + "44", color: C.critical, borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>✕ Remove</button>
-                </div>
-              </div>
-            );
-          })}
-
-          <div style={{ background: "#0a0f1a", border: "1px solid " + (editing ? C.accent + "55" : C.border), borderRadius: 8, padding: "16px", marginTop: 4 }}>
-            <div style={{ fontSize: 10, color: editing ? C.accent : C.muted, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 12 }}>{editing ? "✎ Editing Source" : "+ Add New Source"}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, marginBottom: 8 }}>
-              <div>
-                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>Icon</div>
-                <input type="text" maxLength={2} value={form.icon} onChange={function(e) { setForm(function(f) { return Object.assign({}, f, { icon: e.target.value }); }); }} style={{ ...iStyle, textAlign: "center", fontSize: 20, padding: "5px" }} />
-              </div>
-              <div>
-                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>Label *</div>
-                <input type="text" placeholder="e.g. FCA Handbook" value={form.label} onChange={function(e) { setForm(function(f) { return Object.assign({}, f, { label: e.target.value }); }); }} style={iStyle} />
-              </div>
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>URL *</div>
-              <input type="text" placeholder="https://..." value={form.url} onChange={function(e) { setForm(function(f) { return Object.assign({}, f, { url: e.target.value }); }); }} style={iStyle} />
-            </div>
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>Description (optional)</div>
-              <input type="text" placeholder="Brief description" value={form.description} onChange={function(e) { setForm(function(f) { return Object.assign({}, f, { description: e.target.value }); }); }} style={iStyle} />
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={save} disabled={!canSave} style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "8px 18px", borderRadius: 6, cursor: canSave ? "pointer" : "default", fontSize: 11, fontFamily: "inherit", fontWeight: "bold", opacity: canSave ? 1 : 0.4 }}>
-                {editing ? "✓ Save Changes" : "+ Add Source"}
-              </button>
-              {editing && <button onClick={cancelEdit} style={{ background: "transparent", border: "1px solid " + C.border, color: C.muted, padding: "8px 18px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>Cancel</button>}
-            </div>
-          </div>
-        </div>
-
-        <div style={{ padding: "14px 24px", borderTop: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontSize: 10, color: C.muted }}>{sources.length + " source" + (sources.length !== 1 ? "s" : "") + " configured"}</span>
-          <button onClick={onClose} style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "8px 20px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit", fontWeight: "bold" }}>Done</button>
-        </div>
+          <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-lg text-sm transition">
+            Access DELPHI
+          </button>
+        </form>
       </div>
     </div>
   );
 }
 
-// ── ScannerModal ──────────────────────────────────────────────────────────────
+// ── SIDEBAR ───────────────────────────────────────────────────────────────────
+const NAV = [
+  { id:"dashboard", label:"Dashboard", icon:"M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" },
+  { id:"inventory", label:"Regulation Inventory", icon:"M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
+  { id:"analyze", label:"Analyze", icon:"M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" },
+  { id:"controls", label:"Controls Library", icon:"M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" },
+  { id:"timeline", label:"Timeline", icon:"M13 10V3L4 14h7v7l9-11h-7z" },
+  { id:"calendar", label:"Calendar", icon:"M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" },
+];
 
-function ScannerModal(props) {
-  var scanning = props.scanning;
-  var scanProgress = props.scanProgress;
-  var scanResults = props.scanResults;
-  var onClose = props.onClose;
-  var onRescan = props.onRescan;
-  var onAnalyse = props.onAnalyse;
-  var total = scanResults.reduce(function(t, r) { return t + r.regs.length; }, 0);
+function Sidebar({ active, onNav, onLogout, totalRegs, inScope }) {
+  return (
+    <aside className="fixed inset-y-0 left-0 w-60 bg-gray-950 border-r border-gray-800 flex flex-col z-40">
+      <div className="px-5 py-5 border-b border-gray-800">
+        <div className="text-lg font-bold text-white tracking-tight">DELPHI</div>
+        <div className="text-xs text-gray-500 mt-0.5">Marsh Regulatory Intelligence</div>
+      </div>
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
+        {NAV.map(n => (
+          <button key={n.id} onClick={() => onNav(n.id)}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition text-left ${active === n.id ? "bg-indigo-600 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-white"}`}>
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d={n.icon}/></svg>
+            <span className="truncate">{n.label}</span>
+          </button>
+        ))}
+      </nav>
+      <div className="px-4 py-4 border-t border-gray-800 space-y-2">
+        <div className="text-xs text-gray-500 px-1">
+          <div className="flex justify-between"><span>Regulations:</span><span className="text-gray-300 font-medium">{totalRegs}</span></div>
+          <div className="flex justify-between mt-0.5"><span>In Scope:</span><span className="text-emerald-400 font-medium">{inScope}</span></div>
+        </div>
+        <button onClick={onLogout} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-gray-500 hover:bg-gray-800 hover:text-white transition">
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+          Sign out
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+// ── STAT CARD ─────────────────────────────────────────────────────────────────
+function StatCard({ label, value, sub, color }) {
+  const c = { indigo:"border-indigo-500 bg-indigo-950/30 text-indigo-400", emerald:"border-emerald-500 bg-emerald-950/30 text-emerald-400", amber:"border-amber-500 bg-amber-950/30 text-amber-400", red:"border-red-500 bg-red-950/30 text-red-400", blue:"border-blue-500 bg-blue-950/30 text-blue-400" };
+  return (
+    <div className={`rounded-xl border-l-4 p-4 ${c[color] || c.indigo} bg-gray-900`}>
+      <div className={`text-2xl font-bold`}>{value}</div>
+      <div className="text-sm text-gray-300 mt-0.5 font-medium">{label}</div>
+      {sub && <div className="text-xs text-gray-500 mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+
+// ── DASHBOARD ─────────────────────────────────────────────────────────────────
+function Dashboard({ allRegs, scopeMap, analysisMap }) {
+  const byScope = useMemo(() => {
+    const c = {"In Scope":0,"Out of Scope":0,"Pending":0};
+    allRegs.forEach(r => { const s = scopeMap[r.id] || "Pending"; if (s in c) c[s]++; });
+    return c;
+  }, [allRegs, scopeMap]);
+  const analyzed = useMemo(() => Object.keys(analysisMap).length, [analysisMap]);
+  const upcoming = useMemo(() => allRegs.filter(r => { if (!r.deadline) return false; const d = daysUntil(r.deadline); return d !== null && d >= 0 && d <= 180; }).sort((a,b) => new Date(a.deadline) - new Date(b.deadline)).slice(0,8), [allRegs]);
+  const byDomain = useMemo(() => {
+    const m = {};
+    allRegs.forEach(r => {
+      if (!m[r.domain]) m[r.domain] = {total:0,inScope:0};
+      m[r.domain].total++;
+      if ((scopeMap[r.id] || "Pending") === "In Scope") m[r.domain].inScope++;
+    });
+    return Object.entries(m).sort((a,b) => b[1].total - a[1].total);
+  }, [allRegs, scopeMap]);
+  const byRegion = useMemo(() => {
+    const m = {};
+    allRegs.forEach(r => { if (!m[r.region]) m[r.region] = 0; m[r.region]++; });
+    return Object.entries(m).sort((a,b) => b[1]-a[1]);
+  }, [allRegs]);
 
   return (
-    <div className="modal-bg" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
-      onClick={function(e) { if (e.target === e.currentTarget && !scanning) onClose(); }}>
-      <div className="modal-inner" style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 14, width: "100%", maxWidth: 800, maxHeight: "88vh", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "18px 24px", borderBottom: "1px solid " + C.border, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: "bold", color: C.text }}>⟳ Regulatory Horizon Scan</div>
-            <div style={{ fontSize: 10, color: C.muted, marginTop: 3 }}>
-              {scanning ? "Scanning sources for regulations..." : (total + " regulations found across " + scanResults.length + " sources")}
-            </div>
-          </div>
-          {!scanning && <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.muted, fontSize: 20, cursor: "pointer" }}>✕</button>}
-        </div>
-
-        <div style={{ flex: 1, overflowY: "auto", padding: "16px 24px" }}>
-          {scanProgress.length > 0 && (
-            <div style={{ marginBottom: 20 }}>
-              {scanProgress.map(function(p, i) {
-                return (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#0a0f1a", borderRadius: 7, marginBottom: 6, border: "1px solid " + C.border }}>
-                    <span>{p.status === "scanning" ? "↻" : p.status === "done" ? "✓" : "⚠"}</span>
-                    <span style={{ fontSize: 12, color: C.text, flex: 1 }}>{p.source}</span>
-                    <span style={{ fontSize: 11, color: p.status === "done" ? C.success : p.status === "error" ? C.critical : C.accent }}>
-                      {p.status === "scanning" ? "Scanning..." : p.status === "done" ? (p.count + " found") : "Error"}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {scanResults.map(function(result, si) {
-            return (
-              <div key={si} style={{ marginBottom: 24 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid " + C.border }}>
-                  <span style={{ fontSize: 18 }}>{result.sourceIcon}</span>
-                  <span style={{ fontSize: 12, fontWeight: "bold", color: C.text }}>{result.sourceLabel}</span>
-                  {result.error
-                    ? <span style={{ fontSize: 10, color: C.critical, marginLeft: "auto" }}>{"⚠ " + result.error}</span>
-                    : <span style={{ fontSize: 10, color: C.success, marginLeft: "auto" }}>{result.regs.length + " regulation" + (result.regs.length !== 1 ? "s" : "") + " found"}</span>}
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-bold text-white">Compliance Posture Dashboard</h1>
+        <p className="text-sm text-gray-400 mt-0.5">Global regulatory inventory overview for Marsh entities</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <StatCard label="Total Regulations" value={allRegs.length} color="indigo"/>
+        <StatCard label="In Scope" value={byScope["In Scope"]} sub="Regulations applicable" color="emerald"/>
+        <StatCard label="Out of Scope" value={byScope["Out of Scope"]} sub="Excluded" color="red"/>
+        <StatCard label="Pending Review" value={byScope["Pending"]} sub="Awaiting determination" color="amber"/>
+        <StatCard label="Analyzed" value={analyzed} sub="AI analysis complete" color="blue"/>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Domain breakdown */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <h3 className="text-sm font-semibold text-white mb-3">Regulations by Domain</h3>
+          <div className="space-y-2">
+            {byDomain.map(([dom,{total,inScope}]) => (
+              <div key={dom} className="flex items-center gap-3">
+                <div className="text-xs text-gray-400 w-36 truncate flex-shrink-0">{dom}</div>
+                <div className="flex-1 bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                  <div className="h-full bg-indigo-500 rounded-full" style={{width:`${(total/allRegs.length)*100}%`}}/>
                 </div>
-                {result.regs.length === 0 && !result.error && (
-                  <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", paddingLeft: 8 }}>No regulations identified on this page.</div>
-                )}
-                {result.regs.map(function(reg, ri) {
-                  var statusColor = { "In Force": C.success, "Proposed": C.warning, "Consultation": C.accent, "Upcoming": "#a78bfa" }[reg.status] || C.muted;
-                  return (
-                    <div key={ri} style={{ background: "#0a0f1a", border: "1px solid " + C.border, borderRadius: 8, padding: "12px 16px", marginBottom: 8, display: "flex", gap: 12, alignItems: "flex-start" }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-                          <div style={{ fontSize: 12, fontWeight: "bold", color: C.text, lineHeight: 1.4 }}>{reg.title}</div>
-                          <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-                            {reg.type && <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 3, background: C.accent3 + "22", border: "1px solid " + C.accent3 + "44", color: "#a78bfa", fontWeight: "bold", whiteSpace: "nowrap" }}>{reg.type}</span>}
-                            {reg.status && <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 3, background: statusColor + "22", border: "1px solid " + statusColor + "44", color: statusColor, fontWeight: "bold", whiteSpace: "nowrap" }}>{reg.status}</span>}
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, lineHeight: 1.5 }}>{reg.summary}</div>
-                        <div style={{ display: "flex", gap: 10 }}>
-                          {reg.reference && <span style={{ fontSize: 10, color: C.accent, fontWeight: "bold" }}>{reg.reference}</span>}
-                          {reg.jurisdiction && <span style={{ fontSize: 10, color: C.muted }}>{reg.jurisdiction}</span>}
-                        </div>
-                      </div>
-                      <button onClick={function() { onAnalyse(reg); }}
-                        style={{ background: C.accent + "18", border: "1px solid " + C.accent + "44", color: C.accent, borderRadius: 5, padding: "5px 10px", cursor: "pointer", fontSize: 10, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
-                        + Analyse
-                      </button>
+                <div className="text-xs text-gray-300 w-6 text-right">{total}</div>
+                <div className="text-xs text-emerald-400 w-14 text-right">{inScope} in scope</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Upcoming deadlines */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <h3 className="text-sm font-semibold text-white mb-3">Upcoming Deadlines (180 days)</h3>
+          {upcoming.length === 0 ? (
+            <p className="text-xs text-gray-500 py-4 text-center">No deadlines in the next 180 days</p>
+          ) : (
+            <div className="space-y-2">
+              {upcoming.map(r => {
+                const days = daysUntil(r.deadline);
+                return (
+                  <div key={r.id} className="flex items-start gap-3 py-1.5 border-b border-gray-800 last:border-0">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium text-white truncate">{r.name}</div>
+                      <div className="text-xs text-gray-500">{r.region} · {r.domain}</div>
                     </div>
-                  );
-                })}
-              </div>
-            );
-          })}
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-xs font-semibold" style={{color: urgencyColor(days)}}>{formatDeadline(r.deadline)}</div>
+                      <div className="text-xs text-gray-500">{days === 0 ? "Today" : `${days}d`}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
+        {/* By region */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <h3 className="text-sm font-semibold text-white mb-3">Regulations by Region</h3>
+          <div className="grid grid-cols-2 gap-2">
+            {byRegion.map(([reg,cnt]) => (
+              <div key={reg} className="flex items-center gap-2 text-xs">
+                <span className="text-base">{regionFlag[reg] || "🌐"}</span>
+                <span className="text-gray-400 flex-1">{reg}</span>
+                <span className="text-gray-200 font-medium">{cnt}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Scope pie */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <h3 className="text-sm font-semibold text-white mb-3">Scope Determination Status</h3>
+          <div className="space-y-3 mt-4">
+            {Object.entries(byScope).map(([s,cnt]) => {
+              const pct = allRegs.length ? ((cnt/allRegs.length)*100).toFixed(0) : 0;
+              const col = {["In Scope"]:"bg-emerald-500",["Out of Scope"]:"bg-red-500",Pending:"bg-amber-500"}[s];
+              return (
+                <div key={s}>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-400">{s}</span>
+                    <span className="text-gray-200">{cnt} ({pct}%)</span>
+                  </div>
+                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${col}`} style={{width:`${pct}%`}}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-        {!scanning && scanResults.length > 0 && (
-          <div style={{ padding: "14px 24px", borderTop: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 10, color: C.muted }}>Click + Analyse on any regulation to run a full compliance analysis</span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={onRescan} style={{ background: C.accent3 + "22", border: "1px solid " + C.accent3 + "55", color: "#a78bfa", padding: "7px 16px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>↻ Re-scan</button>
-              <button onClick={onClose} style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "7px 16px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit", fontWeight: "bold" }}>Done</button>
+// ── INVENTORY ─────────────────────────────────────────────────────────────────
+function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, isAdmin }) {
+  const [search, setSearch] = useState("");
+  const [domain, setDomain] = useState("All");
+  const [region, setRegion] = useState("All");
+  const [scope, setScope] = useState("All");
+  const [sortField, setSortField] = useState("name");
+  const [sortDir, setSortDir] = useState("asc");
+  const [page, setPage] = useState(1);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const PER_PAGE = 20;
+
+  const filtered = useMemo(() => {
+    let list = [...allRegs];
+    if (search) { const q = search.toLowerCase(); list = list.filter(r => r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || r.tags?.some(t => t.toLowerCase().includes(q))); }
+    if (domain !== "All") list = list.filter(r => r.domain === domain);
+    if (region !== "All") list = list.filter(r => r.region === region);
+    if (scope !== "All") list = list.filter(r => (scopeMap[r.id] || "Pending") === scope);
+    list.sort((a,b) => {
+      let va = sortField === "scope" ? (scopeMap[a.id]||"Pending") : sortField === "status" ? (analysisMap[a.id] ? "Analyzed" : a.status) : a[sortField] || "";
+      let vb = sortField === "scope" ? (scopeMap[b.id]||"Pending") : sortField === "status" ? (analysisMap[b.id] ? "Analyzed" : b.status) : b[sortField] || "";
+      return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+    });
+    return list;
+  }, [allRegs, search, domain, region, scope, scopeMap, analysisMap, sortField, sortDir]);
+
+  const pages = Math.ceil(filtered.length / PER_PAGE);
+  const paged = filtered.slice((page-1)*PER_PAGE, page*PER_PAGE);
+
+  const sortBy = (f) => { if (sortField === f) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortField(f); setSortDir("asc"); } setPage(1); };
+  const Th = ({f,children}) => (
+    <th onClick={() => sortBy(f)} className="px-3 py-2.5 text-left text-xs font-medium text-gray-400 cursor-pointer hover:text-white select-none whitespace-nowrap">
+      <span className="flex items-center gap-1">{children}{sortField===f && <span className="text-indigo-400">{sortDir==="asc"?"↑":"↓"}</span>}</span>
+    </th>
+  );
+
+  const confirmDelete = (id) => {
+    if (deleteConfirm === id) { onDelete(id); setDeleteConfirm(null); }
+    else { setDeleteConfirm(id); setTimeout(() => setDeleteConfirm(null), 3000); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-xl font-bold text-white">Regulation Inventory</h1>
+          <p className="text-sm text-gray-400">{filtered.length} regulations {filtered.length !== allRegs.length && `(${allRegs.length} total)`}</p>
+        </div>
+        {isAdmin && <Badge color="indigo">Admin Mode</Badge>}
+      </div>
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2">
+        <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
+          placeholder="Search regulations, references, tags…"
+          className="flex-1 min-w-56 bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500"/>
+        <select value={domain} onChange={e => { setDomain(e.target.value); setPage(1); }} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
+          <option>All</option>{DOMAINS.map(d => <option key={d}>{d}</option>)}
+        </select>
+        <select value={region} onChange={e => { setRegion(e.target.value); setPage(1); }} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
+          <option>All</option>{["EU","US","UK","APAC","Global","Canada","LATAM","Middle East","Africa"].map(r => <option key={r}>{r}</option>)}
+        </select>
+        <select value={scope} onChange={e => { setScope(e.target.value); setPage(1); }} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
+          <option>All</option><option>In Scope</option><option>Out of Scope</option><option>Pending</option>
+        </select>
+      </div>
+      {/* Table */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-800/60 border-b border-gray-700">
+              <tr>
+                <Th f="id">ID</Th>
+                <Th f="name">Regulation</Th>
+                <Th f="region">Region</Th>
+                <Th f="domain">Domain</Th>
+                <Th f="status">Status</Th>
+                <Th f="scope">Scope</Th>
+                <th className="px-3 py-2.5 text-left text-xs text-gray-400">Deadline</th>
+                <th className="px-3 py-2.5 text-left text-xs text-gray-400">Scope / Admin</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800">
+              {paged.map(r => {
+                const regStatus = analysisMap[r.id] ? "Analyzed" : r.status;
+                const currentScope = scopeMap[r.id] || "Pending";
+                const days = daysUntil(r.deadline);
+                return (
+                  <tr key={r.id} className="hover:bg-gray-800/40 transition">
+                    <td className="px-3 py-2.5 text-xs text-gray-500 font-mono">{r.id}</td>
+                    <td className="px-3 py-2.5">
+                      <div className="font-medium text-white text-sm leading-tight max-w-xs">{r.name}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">{r.reference}</div>
+                    </td>
+                    <td className="px-3 py-2.5 text-sm">{regionFlag[r.region]} {r.region}</td>
+                    <td className="px-3 py-2.5"><Badge color="gray" small>{r.domain}</Badge></td>
+                    <td className="px-3 py-2.5"><Badge color={statusBadge(regStatus)} small>{regStatus}</Badge></td>
+                    <td className="px-3 py-2.5"><Badge color={scopeBadge(currentScope)} small>{currentScope}</Badge></td>
+                    <td className="px-3 py-2.5 text-xs whitespace-nowrap">
+                      {r.deadline ? <span style={{color:urgencyColor(days)}}>{formatDeadline(r.deadline)}{days !== null && days >= 0 && <span className="ml-1 text-gray-500">({days}d)</span>}</span> : <span className="text-gray-600">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <select value={currentScope}
+                          onChange={e => onScopeChange(r.id, e.target.value)}
+                          className="text-xs bg-gray-800 border border-gray-700 text-gray-300 rounded px-2 py-1 outline-none">
+                          <option>Pending</option><option>In Scope</option><option>Out of Scope</option>
+                        </select>
+                        {isAdmin && (
+                          <button onClick={() => confirmDelete(r.id)}
+                            className={`text-xs px-2 py-1 rounded transition ${deleteConfirm===r.id ? "bg-red-600 text-white" : "bg-gray-800 text-gray-500 hover:text-red-400 hover:bg-gray-700"}`}>
+                            {deleteConfirm===r.id ? "Confirm" : "✕"}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {paged.length === 0 && (
+                <tr><td colSpan={8} className="text-center py-12 text-gray-500 text-sm">No regulations match your filters</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {pages > 1 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-800">
+            <span className="text-xs text-gray-500">Page {page} of {pages} · {filtered.length} results</span>
+            <div className="flex gap-1">
+              <button onClick={() => setPage(p => Math.max(1, p-1))} disabled={page===1} className="px-2.5 py-1 rounded text-xs bg-gray-800 text-gray-300 disabled:opacity-40 hover:bg-gray-700">←</button>
+              {Array.from({length:Math.min(5,pages)}, (_,i) => { const pg = Math.max(1,Math.min(pages-4, page-2))+i; return (
+                <button key={pg} onClick={() => setPage(pg)} className={`px-2.5 py-1 rounded text-xs ${pg===page?"bg-indigo-600 text-white":"bg-gray-800 text-gray-300 hover:bg-gray-700"}`}>{pg}</button>
+              ); })}
+              <button onClick={() => setPage(p => Math.min(pages, p+1))} disabled={page===pages} className="px-2.5 py-1 rounded text-xs bg-gray-800 text-gray-300 disabled:opacity-40 hover:bg-gray-700">→</button>
             </div>
           </div>
         )}
@@ -386,1042 +402,526 @@ function ScannerModal(props) {
   );
 }
 
-// ── UploadZone ────────────────────────────────────────────────────────────────
+// ── ANALYZE ────────────────────────────────────────────────────────────────────
+function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComplete }) {
+  const [selected, setSelected] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
 
-function UploadZone(props) {
-  var onFile = props.onFile;
-  var uploading = props.uploading;
-  async function processFile(file) {
-    if (!file) return;
-    var name = file.name.replace(/\.[^/.]+$/, "");
-    if (file.type === "application/pdf") {
-      onFile(name, null, file);
-    } else {
-      var text = await file.text();
-      onFile(name, text, null);
-    }
-  }
+  const reg = allRegs.find(r => r.id === selected);
+  const existingAnalysis = selected ? analysisMap[selected] : null;
+
+  useEffect(() => {
+    if (existingAnalysis) setResult(existingAnalysis);
+    else setResult(null);
+  }, [selected, existingAnalysis]);
+
+  const inScopeIds = useMemo(() => new Set(Object.entries(scopeMap).filter(([,v])=>v==="In Scope").map(([k])=>k)), [scopeMap]);
+  const existingControlIds = useMemo(() => {
+    const ctrlSet = new Set();
+    CONTROLS_LIBRARY.forEach(c => { if (c.regulations.some(rId => inScopeIds.has(rId) && rId !== selected)) ctrlSet.add(c.controlId); });
+    return ctrlSet;
+  }, [inScopeIds, selected]);
+
+  const analyze = async () => {
+    if (!reg) return;
+    setLoading(true); setError(""); setResult(null);
+    const allExistingControls = CONTROLS_LIBRARY
+      .filter(c => c.regulations.some(rId => inScopeIds.has(rId) && rId !== selected))
+      .map(c => `${c.controlId}: ${c.title}`)
+      .join("\n");
+    const regControls = CONTROLS_LIBRARY.filter(c => c.regulations.includes(selected));
+    const prompt = `You are a senior regulatory compliance expert for Marsh McLennan.
+
+Analyze this regulation for Marsh:
+Name: ${reg.name}
+Reference: ${reg.reference}
+Region: ${reg.region}
+Domain: ${reg.domain}
+Status: ${reg.status}
+Effective Date: ${reg.effectiveDate}
+Deadline: ${reg.deadline || "N/A"}
+Summary: ${reg.summary}
+Applicable Marsh entities: ${reg.marshEntities?.join(", ")}
+
+Existing controls already in place (from other In Scope regulations):
+${allExistingControls || "None yet"}
+
+Controls mapped to this regulation in the library:
+${regControls.map(c=>`${c.controlId}: ${c.title}`).join("\n") || "None mapped yet"}
+
+Provide a JSON response (no markdown fences) with:
+{
+  "executiveSummary": "2-3 sentence summary of the regulation's impact on Marsh",
+  "businessRisk": "High|Medium|Low",
+  "riskRationale": "1-2 sentences explaining the risk rating",
+  "keyObligations": ["obligation 1", "obligation 2", "obligation 3", "obligation 4", "obligation 5"],
+  "applicableEntities": ["entity1", "entity2"],
+  "newControls": [
+    {"title": "control title", "description": "what Marsh must do", "priority": "Immediate|Short-term|Ongoing", "isNew": true}
+  ],
+  "gapAnalysis": "Assessment of the compliance gap and work remaining",
+  "deadlineRisk": "Commentary on timeline pressure if applicable",
+  "recommendedActions": ["action 1", "action 2", "action 3"]
+}
+newControls should highlight ONLY controls that are not already covered by existing controls.`;
+    try {
+      const res = await fetch(PROXY_URL, { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ model:"claude-opus-4-5", max_tokens:2000, messages:[{role:"user",content:prompt}] })
+      });
+      if (!res.ok) throw new Error(`API error ${res.status}`);
+      const data = await res.json();
+      const text = data.content?.[0]?.text || data.content || "";
+      let parsed;
+      try { parsed = JSON.parse(text); }
+      catch { const m = text.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); else throw new Error("Could not parse response"); }
+      onAnalysisComplete(selected, parsed);
+      setResult(parsed);
+    } catch(e) { setError(e.message || "Analysis failed"); }
+    finally { setLoading(false); }
+  };
+
+  const riskColor = (r) => ({High:"text-red-400",Medium:"text-amber-400",Low:"text-emerald-400"}[r]||"text-gray-400");
+
   return (
-    <div style={{ marginBottom: 8 }}>
-      <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 5 }}>
-        {uploading ? "⏳ Extracting text..." : "☁ Upload File (PDF · TXT · MD)"}
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-xl font-bold text-white">Analyze Regulation</h1>
+        <p className="text-sm text-gray-400 mt-0.5">AI-powered compliance analysis with gap assessment</p>
       </div>
-      <input type="file" accept=".txt,.pdf,.md,.doc,.docx" disabled={uploading}
-        onChange={function(e) { var f = e.target.files && e.target.files[0]; if (f) processFile(f); e.target.value = ""; }}
-        style={{ display: "block", width: "100%", fontSize: 11, color: C.muted, background: "#0a0f1acc", border: "1px solid " + C.border, borderRadius: 7, padding: "8px 10px", fontFamily: "inherit", cursor: "pointer", boxSizing: "border-box" }} />
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4">
+        <div>
+          <label className="text-xs font-medium text-gray-400 uppercase tracking-wider block mb-2">Select Regulation</label>
+          <select value={selected} onChange={e => setSelected(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm outline-none focus:border-indigo-500">
+            <option value="">— Select a regulation to analyze —</option>
+            {allRegs.map(r => <option key={r.id} value={r.id}>{r.id}: {r.name}</option>)}
+          </select>
+        </div>
+        {reg && (
+          <div className="bg-gray-800/50 rounded-lg p-4 space-y-2">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold text-white">{reg.name}</div>
+                <div className="text-xs text-gray-500 mt-0.5">{reg.reference} · {reg.region} · {reg.domain}</div>
+              </div>
+              <div className="flex gap-2 flex-shrink-0">
+                <Badge color={statusBadge(analysisMap[selected] ? "Analyzed" : reg.status)} small>{analysisMap[selected] ? "Analyzed" : reg.status}</Badge>
+                <Badge color={scopeBadge(scopeMap[selected]||"Pending")} small>{scopeMap[selected]||"Pending"}</Badge>
+              </div>
+            </div>
+            <p className="text-xs text-gray-400 leading-relaxed">{reg.summary}</p>
+            {reg.deadline && <div className="text-xs" style={{color:urgencyColor(daysUntil(reg.deadline))}}>⏱ Deadline: {formatDeadline(reg.deadline)} ({daysUntil(reg.deadline)} days)</div>}
+            <div className="flex items-center gap-3 pt-1">
+              <label className="text-xs text-gray-400">Scope:</label>
+              <select value={scopeMap[selected]||"Pending"} onChange={e => onScopeChange(selected, e.target.value)}
+                className="text-xs bg-gray-700 border border-gray-600 text-gray-200 rounded px-2 py-1 outline-none">
+                <option>Pending</option><option>In Scope</option><option>Out of Scope</option>
+              </select>
+            </div>
+          </div>
+        )}
+        <button onClick={analyze} disabled={!selected || loading}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold px-5 py-2.5 rounded-lg text-sm transition">
+          {loading ? (<><svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>Analyzing…</>) : "Run Analysis"}
+        </button>
+        {error && <div className="bg-red-950/50 border border-red-800 text-red-300 text-sm rounded-lg p-3">{error}</div>}
+      </div>
+      {result && (
+        <div className="space-y-4">
+          {/* Executive summary */}
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-white">Executive Summary</h3>
+              <span className={`text-sm font-bold ${riskColor(result.businessRisk)}`}>
+                {result.businessRisk} Risk
+              </span>
+            </div>
+            <p className="text-sm text-gray-300 leading-relaxed">{result.executiveSummary}</p>
+            {result.riskRationale && <p className="text-xs text-gray-500 mt-2 italic">{result.riskRationale}</p>}
+          </div>
+          {/* Key obligations */}
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <h3 className="font-semibold text-white mb-3">Key Obligations</h3>
+            <ul className="space-y-2">
+              {result.keyObligations?.map((o,i) => (
+                <li key={i} className="flex items-start gap-2 text-sm text-gray-300">
+                  <span className="text-indigo-400 mt-0.5 flex-shrink-0">→</span>{o}
+                </li>
+              ))}
+            </ul>
+          </div>
+          {/* Gap analysis */}
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <h3 className="font-semibold text-white mb-2">Gap Analysis</h3>
+            <p className="text-sm text-gray-300 leading-relaxed">{result.gapAnalysis}</p>
+          </div>
+          {/* New controls — highlighted */}
+          {result.newControls?.length > 0 && (
+            <div className="bg-indigo-950/30 border border-indigo-700/50 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/></svg>
+                <h3 className="font-semibold text-indigo-300">New Controls Required ({result.newControls.length})</h3>
+                <span className="text-xs text-indigo-500 ml-1">— not covered by existing in-scope regulations</span>
+              </div>
+              <div className="space-y-3">
+                {result.newControls.map((c,i) => (
+                  <div key={i} className="bg-indigo-900/20 border border-indigo-800/40 rounded-lg p-3">
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <span className="font-medium text-indigo-200 text-sm">{c.title}</span>
+                      <Badge color={c.priority==="Immediate"?"red":c.priority==="Short-term"?"amber":"blue"} small>{c.priority}</Badge>
+                    </div>
+                    <p className="text-xs text-gray-400 leading-relaxed">{c.description}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Recommended actions */}
+          {result.recommendedActions?.length > 0 && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+              <h3 className="font-semibold text-white mb-3">Recommended Actions</h3>
+              <ol className="space-y-2">
+                {result.recommendedActions.map((a,i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-gray-300">
+                    <span className="text-xs text-gray-500 bg-gray-800 rounded px-1.5 py-0.5 mt-0.5 flex-shrink-0 font-mono">{i+1}</span>{a}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+          {result.deadlineRisk && (
+            <div className="bg-amber-950/30 border border-amber-800/40 rounded-xl p-4">
+              <div className="flex items-start gap-2"><span className="text-amber-400">⚠</span><p className="text-sm text-amber-200">{result.deadlineRisk}</p></div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-// ── Main App ──────────────────────────────────────────────────────────────────
+// ── CONTROLS LIBRARY ──────────────────────────────────────────────────────────
+function Controls({ allRegs, scopeMap, analysisMap }) {
+  const [cat, setCat] = useState("All");
+  const [search, setSearch] = useState("");
+  const [showAll, setShowAll] = useState(false);
 
-export default function App() {
-  var [authed, setAuthed] = useState(function() {
-    return sessionStorage.getItem("delphi_auth") === "true";
-  });
-  var [pwInput, setPwInput] = useState("");
-  var [pwError, setPwError] = useState(false);
-  var [regulations, setRegulations] = useState(function() { return loadRegs(); });
-  var [inputTitle, setInputTitle] = useState("");
-  var [inputText, setInputText] = useState("");
-  var [selected, setSelected] = useState(null);
-  var [analyzing, setAnalyzing] = useState(false);
-  var [uploading, setUploading] = useState(false);
-  var [activeTab, setActiveTab] = useState("summary");
-  var [openActions, setOpenActions] = useState({});
-  var [urlInput, setUrlInput] = useState("");
-  var [fetchingUrl, setFetchingUrl] = useState(false);
-  var [urlError, setUrlError] = useState("");
-  var [sources, setSources] = useState(function() {
-    try {
-      var stored = localStorage.getItem("delphi_sources");
-      if (!stored) {
-        // First time — save defaults immediately so they persist
-        localStorage.setItem("delphi_sources", JSON.stringify(DEFAULT_SOURCES));
-        return DEFAULT_SOURCES;
-      }
-      // Return whatever is stored — user controls additions and deletions
-      return JSON.parse(stored);
-    } catch(e) {
-      return DEFAULT_SOURCES;
-    }
-  });
-  var [showSources, setShowSources] = useState(false);
-  var [scanning, setScanning] = useState(false);
-  var [scanResults, setScanResults] = useState([]);
-  var [scanProgress, setScanProgress] = useState([]);
-  var [showScanner, setShowScanner] = useState(false);
-  var [showMobileSidebar, setShowMobileSidebar] = useState(false);
-  var [mobileView, setMobileView] = useState("home"); // "home" | "detail"
+  const inScopeIds = useMemo(() => new Set(Object.entries(scopeMap).filter(([,v])=>v==="In Scope").map(([k])=>k)), [scopeMap]);
+  const categories = useMemo(() => ["All", ...new Set(CONTROLS_LIBRARY.map(c => c.category))], []);
 
-  // ── Inventory / Dashboard state ──
-  var [appView, setAppView] = useState("dashboard"); // "dashboard" | "analyze"
-  var [invFilter, setInvFilter] = useState({ region: "All", domain: "All", status: "All", marshOnly: true, search: "" });
-  var [ctrlFilter, setCtrlFilter] = useState({ category: "All", search: "" });
-  var [dashTab, setDashTab] = useState("inventory"); // "inventory" | "controls"
+  const controls = useMemo(() => {
+    let list = CONTROLS_LIBRARY;
+    if (!showAll) list = list.filter(c => c.regulations.some(rId => inScopeIds.has(rId)));
+    if (cat !== "All") list = list.filter(c => c.category === cat);
+    if (search) { const q = search.toLowerCase(); list = list.filter(c => c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q) || c.owner.toLowerCase().includes(q)); }
+    return list;
+  }, [inScopeIds, cat, search, showAll]);
 
-  function updateSources(updater) {
-    setSources(function(prev) {
-      var next = typeof updater === "function" ? updater(prev) : updater;
-      try {
-        localStorage.setItem("delphi_sources", JSON.stringify(next));
-      } catch(e) {
-        console.warn("Could not save sources to localStorage:", e);
-      }
-      return next;
-    });
-  }
-
-  async function handleFileUpload(name, text, pdfFile) {
-    setInputTitle(name);
-    if (pdfFile) {
-      setUploading(true);
-      try {
-        if (!window.pdfjsLib) {
-          await new Promise(function(res, rej) {
-            var s = document.createElement("script");
-            s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-            s.onload = res; s.onerror = rej;
-            document.head.appendChild(s);
-          });
-          window.pdfjsLib.GlobalWorkerOptions.workerSrc = "";
-        }
-        var buf = await pdfFile.arrayBuffer();
-        var pdf = await window.pdfjsLib.getDocument({ data: buf, useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true }).promise;
-        var pages = [];
-        for (var i = 1; i <= pdf.numPages; i++) {
-          var page = await pdf.getPage(i);
-          var tc = await page.getTextContent();
-          pages.push(tc.items.map(function(it) { return it.str; }).join(" "));
-        }
-        var extracted = pages.join("\n\n").trim();
-        setInputText(extracted || "[No text extracted — please paste manually]");
-      } catch(e) {
-        setInputText("[Could not extract PDF — please paste text manually]");
-      }
-      setUploading(false);
-    } else {
-      setInputText(text);
-    }
-  }
-
-  async function fetchFromUrl(url) {
-    if (!url.trim()) return;
-    setFetchingUrl(true);
-    setUrlError("");
-    try {
-      var domain = url;
-      try { domain = new URL(url).hostname.replace("www.", ""); } catch(e) {}
-      var prompt = "Search for regulations and legislation published on " + domain + ". The page URL is: " + url + ". Find all named regulations, directives, acts, or consultations available there. List them with their titles, reference numbers, and brief descriptions. Write your findings as plain descriptive text.";
-      var raw = await apiCall([{ role: "user", content: prompt }], 2000, true);
-      if (!raw.trim()) throw new Error("No content returned.");
-      setInputTitle("Regulations from " + domain);
-      setInputText(raw);
-    } catch(err) {
-      var msg = err.message || "";
-      if (msg === "LIMIT_EXCEEDED") {
-        setUrlError(limitMsg());
-      } else {
-        setUrlError("Could not retrieve content. Try copying and pasting the regulation text manually.");
-      }
-    }
-    setFetchingUrl(false);
-  }
-
-  async function scanAllSources() {
-    if (!sources.length) return;
-    setScanning(true);
-    setShowScanner(true);
-    setScanResults([]);
-    setScanProgress([]);
-
-    for (var i = 0; i < sources.length; i++) {
-      var src = sources[i];
-      var srcLabel = src.label;
-      setScanProgress(function(prev) { return prev.concat([{ source: srcLabel, status: "scanning" }]); });
-      try {
-        var domain = src.url;
-        try { domain = new URL(src.url).hostname.replace("www.", ""); } catch(e) {}
-        var prompt = "You are a regulatory horizon scanning assistant. Search the website " + domain + " (URL: " + src.url + ") and identify all regulations, directives, legislative acts, and consultations listed there. For each one found provide: title (full name), type (one of: Regulation, Directive, Consultation, Guidance), reference (the official number e.g. 2022/2554/EU, or empty string), status (one of: In Force, Proposed, Consultation, Upcoming), summary (one sentence description), jurisdiction (region or country). Return ONLY a raw JSON array with no markdown. Example format: [{\"title\":\"...\",\"type\":\"...\",\"reference\":\"...\",\"status\":\"...\",\"summary\":\"...\",\"jurisdiction\":\"...\"}]. If nothing found return [].";
-        var raw = await apiCall([{ role: "user", content: prompt }], 3000, true);
-        var regs = [];
-        try {
-          var match = raw.match(/\[[\s\S]*\]/);
-          if (match) regs = JSON.parse(match[0]);
-        } catch(e) { regs = []; }
-        var count = regs.length;
-        setScanResults(function(prev) { return prev.concat([{ sourceId: src.id, sourceLabel: src.label, sourceIcon: src.icon, regs: regs, error: null }]); });
-        setScanProgress(function(prev) { return prev.map(function(p) { return p.source === srcLabel ? { source: p.source, status: "done", count: count } : p; }); });
-      } catch(err) {
-        var errMsg = err.message === "LIMIT_EXCEEDED" ? "Usage limit reached — try again later" : (err.message || "Unknown error");
-        var capturedLabel = srcLabel;
-        setScanResults(function(prev) { return prev.concat([{ sourceId: src.id, sourceLabel: src.label, sourceIcon: src.icon, regs: [], error: errMsg }]); });
-        setScanProgress(function(prev) { return prev.map(function(p) { return p.source === capturedLabel ? { source: p.source, status: "error" } : p; }); });
-      }
-    }
-    setScanning(false);
-  }
-
-  async function analyzeRegulation(reg) {
-    setAnalyzing(true);
-    var pending = Object.assign({}, reg, { loading: true });
-    setSelected(pending);
-    setRegulations(function(prev) { return [pending].concat(prev.filter(function(r) { return r.id !== reg.id; })); });
-    setOpenActions({});
-
-    var truncated = reg.text.length > 4000 ? reg.text.slice(0, 4000) + "..." : reg.text;
-    var prompt = "You are a regulatory compliance expert. Analyze the regulation below and respond with ONLY a valid JSON object. No prose, no markdown, no backticks.\n\nREGULATION TEXT:\n" + truncated + "\n\nReturn this exact JSON (values under 40 words except verbatim legislative fields):\n{\"instrumentType\":\"Regulation or Directive\",\"fullName\":\"Full official name\",\"referenceNumber\":\"e.g. 2022/2554/EU\",\"summary\":\"One sentence\",\"jurisdiction\":\"region\",\"impactAreas\":[\"area1\",\"area2\"],\"chapters\":[{\"number\":\"Chapter I\",\"title\":\"title\"}],\"transitionalPeriod\":\"Verbatim text of article titled Transitional Period or N/A\",\"transpositionDate\":\"Verbatim text of article titled Transposition or N/A\",\"repealOfLegislation\":\"Verbatim text of article titled Repeal or N/A\",\"entryIntoForce\":\"Verbatim text of article titled Entry into force or N/A\",\"effectiveDate\":\"date or TBD\",\"deadline\":\"deadline or Ongoing\",\"riskLevel\":\"Critical\",\"overallRisk\":{\"rating\":\"Critical\",\"score\":9,\"summary\":\"sentence\",\"financialExposure\":\"sentence\",\"reputationalExposure\":\"sentence\",\"operationalExposure\":\"sentence\",\"mitigatingFactors\":[\"factor1\"]},\"mmcScope\":[{\"entity\":\"name\",\"inScope\":true,\"reason\":\"sentence\"}],\"controls\":[{\"controlId\":\"CTRL-001\",\"title\":\"Short control name\",\"description\":\"What the control requires\",\"category\":\"Governance or Risk or Compliance or Technology or Operational or Reporting\",\"priority\":\"Immediate or Short-term or Ongoing\",\"owner\":\"Responsible team\",\"steps\":[\"Implementation step 1\",\"Implementation step 2\",\"Implementation step 3\"],\"testingCriteria\":\"How to verify the control is operating effectively\",\"articleReference\":\"Article or Section reference\"}]}\n\nRules: instrumentType exactly Regulation or Directive. chapters top-level only. riskLevel and overallRisk.rating: Critical/High/Medium/Low. overallRisk.score 1-10. Assess ALL Marsh entities for mmcScope. priority: Immediate/Short-term/Ongoing. 6-10 controls with 3-5 steps each. controlId must be unique sequential e.g. CTRL-001. Output ONLY raw JSON.";
-
-    try {
-      var raw = await apiCall([{ role: "user", content: prompt }]);
-      var match = raw.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("No JSON found. Got: " + raw.slice(0, 200));
-      var analysis = JSON.parse(match[0]);
-      var enriched = Object.assign({}, reg, { analysis: analysis, loading: false, savedAt: reg.savedAt || Date.now(), inScope: reg.inScope || false });
-      setRegulations(function(prev) {
-        var updated = prev.map(function(r) { return r.id === reg.id ? enriched : r; });
-        saveRegs(updated);
-        return updated;
-      });
-      setSelected(enriched);
-    } catch(err) {
-      var errText = err.message === "LIMIT_EXCEEDED" ? limitMsg() : ("Analysis failed: " + err.message);
-      var failed = Object.assign({}, reg, { loading: false, error: errText });
-      setRegulations(function(prev) { return prev.map(function(r) { return r.id === reg.id ? failed : r; }); });
-      setSelected(failed);
-    }
-    setAnalyzing(false);
-  }
-
-  function addRegulation() {
-    if (!inputText.trim()) return;
-    var reg = { id: Date.now(), title: inputTitle.trim() || ("Regulation " + (regulations.length + 1)), text: inputText.trim(), addedAt: new Date().toLocaleDateString(), savedAt: Date.now(), inScope: false };
-    setInputText(""); setInputTitle(""); setActiveTab("summary");
-    analyzeRegulation(reg);
-  }
-
-  function loadSample(s) {
-    var reg = { id: Date.now(), title: s.title, text: s.text, addedAt: new Date().toLocaleDateString(), savedAt: Date.now(), inScope: false };
-    setActiveTab("summary");
-    analyzeRegulation(reg);
-  }
-
-  function handleAnalyseFromScan(reg) {
-    var text = (reg.title || "") + ". " + (reg.summary || "") + " Type: " + (reg.type || "") + ". Reference: " + (reg.reference || "N/A") + ". Status: " + (reg.status || "N/A") + ". Jurisdiction: " + (reg.jurisdiction || "N/A") + ".";
-    var r = { id: Date.now(), title: reg.title || "Scanned Regulation", text: text, addedAt: new Date().toLocaleDateString(), savedAt: Date.now(), inScope: false };
-    setShowScanner(false);
-    setActiveTab("summary");
-    analyzeRegulation(r);
-  }
-
-  var btnP = { width: "100%", background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "bold" };
-  var btnS = { width: "100%", background: "transparent", border: "1px solid " + C.border, color: C.muted, padding: "7px 10px", borderRadius: 6, cursor: "pointer", fontSize: 10, fontFamily: "inherit", marginBottom: 5, textAlign: "left", display: "flex", alignItems: "center", gap: 6 };
-  var sLabel = { fontSize: 10, color: C.muted, letterSpacing: "0.18em", textTransform: "uppercase", marginBottom: 7, display: "block" };
-  var sHead = { fontSize: 10, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 14 };
-  var sumBox = { background: C.panel, border: "1px solid " + C.border, borderRadius: 10, padding: "16px 20px", fontSize: 13, lineHeight: 1.8, color: C.text };
-  var metaCard = { background: C.panel, border: "1px solid " + C.border, borderRadius: 10, padding: "13px 16px" };
-
-  var a = selected && selected.analysis ? selected.analysis : null;
-  var totalFound = scanResults.reduce(function(t, r) { return t + r.regs.length; }, 0);
-
-  if (!authed) {
-    return (
-      <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'IBM Plex Mono','Courier New',monospace", color: C.text, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 14, padding: "40px 48px", width: "100%", maxWidth: 400, textAlign: "center" }}>
-          <div style={{ width: 52, height: 52, background: "linear-gradient(135deg," + C.accent + "," + C.accent3 + ")", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, margin: "0 auto 20px" }}>⚖</div>
-          <div style={{ fontSize: 20, fontWeight: "bold", color: C.accent, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 6 }}>DELPHI</div>
-          <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 32 }}>Document Extraction for Legal/Policy Harmonization & Implementation</div>
-          <div style={{ marginBottom: 16, textAlign: "left" }}>
-            <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Access Password</div>
-            <input
-              type="password"
-              placeholder="Enter password..."
-              value={pwInput}
-              onChange={function(e) { setPwInput(e.target.value); setPwError(false); }}
-              onKeyDown={function(e) {
-                if (e.key === "Enter") {
-                  if (pwInput === "Regscan") {
-                    sessionStorage.setItem("delphi_auth", "true");
-                    setAuthed(true);
-                  } else {
-                    setPwError(true);
-                    setPwInput("");
-                  }
-                }
-              }}
-              style={{ width: "100%", background: "#0a0f1a", border: "1px solid " + (pwError ? C.critical : C.border), borderRadius: 7, color: C.text, fontFamily: "inherit", fontSize: 13, padding: "10px 12px", outline: "none", boxSizing: "border-box", marginBottom: 4 }}
-            />
-            {pwError && <div style={{ fontSize: 10, color: C.critical, marginTop: 4 }}>Incorrect password. Please try again.</div>}
-          </div>
-          <button
-            onClick={function() {
-              if (pwInput === "Regscan") {
-                sessionStorage.setItem("delphi_auth", "true");
-                setAuthed(true);
-              } else {
-                setPwError(true);
-                setPwInput("");
-              }
-            }}
-            style={{ width: "100%", background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "11px", borderRadius: 7, cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: "bold", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-            → Enter
-          </button>
-          <div style={{ marginTop: 20, fontSize: 9, color: C.muted, letterSpacing: "0.08em" }}>DELPHI · Regulatory Intelligence Platform</div>
-        </div>
-      </div>
-    );
-  }
+  const regName = (id) => allRegs.find(r => r.id === id)?.name || id;
+  const isInScope = (id) => inScopeIds.has(id);
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'IBM Plex Mono','Courier New',monospace", color: C.text }}>
-      <style>{"\n        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap');\n        *{box-sizing:border-box;margin:0;}\n        input:focus,textarea:focus{border-color:#00d4ff!important;outline:none;}\n        input[type=file]{font-size:12px}\n        @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}\n        @keyframes blink{50%{opacity:0}}\n        @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}\n        .fade-in{animation:fadeIn 0.3s ease forwards}\n        ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:3px}\n        .hov:hover{background:rgba(0,212,255,0.07)!important}\n        .btnp:hover{background:linear-gradient(135deg,rgba(0,212,255,0.28),rgba(124,58,237,0.28))!important}\n        .tab{cursor:pointer;padding:5px 10px;border-radius:5px;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;font-family:inherit;border:none;white-space:nowrap;}\n        .ton{background:rgba(0,212,255,0.15);color:#00d4ff;}\n        .toff{color:#64748b;background:transparent;}\n        .toff:hover{color:#94a3b8;}\n        .mobile-only{display:none!important}\n        .mobile-nav{display:none!important}\n        body.is-mobile .desktop-sidebar{display:none!important}\n        body.is-mobile .mobile-only{display:flex!important}\n        body.is-mobile .mobile-nav{display:flex!important}\n        body.is-mobile .app-grid{grid-template-columns:1fr!important}\n        body.is-mobile .main-panel{padding:16px 14px!important}\n        body.is-mobile .hdr{padding:10px 14px!important}\n        body.is-mobile .hdr-scan-label{display:none!important}\n        body.is-mobile .meta-3col{grid-template-columns:1fr 1fr!important}\n        body.is-mobile .risk-3col{grid-template-columns:1fr!important}\n        body.is-mobile .modal-inner{max-width:100%!important;max-height:92vh!important;border-radius:14px 14px 0 0!important;position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100%!important}\n        body.is-mobile .modal-bg{align-items:flex-end!important;padding:0!important}\n        body.is-mobile .tab-scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch;padding-bottom:4px}\n        body.is-mobile .tab-scroll::-webkit-scrollbar{display:none}\n      "}</style>
-
-      {/* Header */}
-      <div className="hdr" style={{ borderBottom: "1px solid " + C.border, padding: "14px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.panel, position: "sticky", top: 0, zIndex: 100 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 34, height: 34, background: "linear-gradient(135deg," + C.accent + "," + C.accent3 + ")", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17 }}>⚖</div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: "bold", letterSpacing: "0.15em", color: C.accent, textTransform: "uppercase" }}>DELPHI</div>
-            <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase" }}>Document Extraction for Legal/Policy Harmonization & Implementation</div>
-          </div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {totalFound > 0 && !scanning && (
-            <button onClick={function() { setShowScanner(true); }}
-              style={{ background: C.success + "22", border: "1px solid " + C.success + "44", color: C.success, padding: "5px 14px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: "bold" }}>
-              {"📋 " + totalFound + " Found"}
-            </button>
-          )}
-          {/* App navigation */}
-          <div style={{ display: "flex", gap: 4 }}>
-            <button onClick={function() { setAppView("dashboard"); }} style={{ background: appView === "dashboard" ? C.accent + "22" : "transparent", border: "1px solid " + (appView === "dashboard" ? C.accent : C.border), color: appView === "dashboard" ? C.accent : C.muted, padding: "4px 12px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>🌐 Dashboard</button>
-            <button onClick={function() { setAppView("inventory"); }} style={{ background: appView === "inventory" ? C.accent + "22" : "transparent", border: "1px solid " + (appView === "inventory" ? C.accent : C.border), color: appView === "inventory" ? C.accent : C.muted, padding: "4px 12px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>📋 Inventory</button>
-            <button onClick={function() { setAppView("analyze"); }} style={{ background: appView === "analyze" ? C.accent + "22" : "transparent", border: "1px solid " + (appView === "analyze" ? C.accent : C.border), color: appView === "analyze" ? C.accent : C.muted, padding: "4px 12px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>🔬 Analyse</button>
-          </div>
-          <div style={{ background: C.accent + "22", border: "1px solid " + C.accent + "44", color: C.accent, padding: "4px 12px", borderRadius: 20, fontSize: 11 }}>⬡ AI-Powered</div>
-          <button onClick={function() { sessionStorage.removeItem("delphi_auth"); setAuthed(false); setPwInput(""); }}
-            style={{ background: "transparent", border: "1px solid " + C.border, color: C.muted, padding: "4px 12px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
-            ⎋ Logout
-          </button>
-        </div>
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-xl font-bold text-white">Controls Library</h1>
+        <p className="text-sm text-gray-400 mt-0.5">
+          {showAll ? `All controls (${controls.length})` : `Controls for In Scope regulations (${controls.length})`}
+        </p>
       </div>
-
-      {/* Body */}
-      {appView === "analyze" && <div className="app-grid" style={{ display: "grid", gridTemplateColumns: "360px 1fr", minHeight: "calc(100vh - 65px)" }}>
-
-        {/* Sidebar */}
-        <div className="desktop-sidebar" style={{ borderRight: "1px solid " + C.border, background: C.panel, display: "flex", flexDirection: "column", overflowY: "auto" }}>
-          <div style={{ padding: "18px 18px 14px", borderBottom: "1px solid " + C.border }}>
-            <span style={sLabel}>Ingest Regulation</span>
-            <input type="text" placeholder="Regulation title (optional)..." value={inputTitle} onChange={function(e) { setInputTitle(e.target.value); }} style={{ ...iStyle, marginBottom: 8, display: "block" }} />
-            <UploadZone onFile={handleFileUpload} uploading={uploading} />
-            <div style={{ marginBottom: 8 }}>
-              <span style={{ ...sLabel, marginBottom: 5 }}>🔗 Import from URL</span>
-              <div style={{ display: "flex", gap: 6 }}>
-                <input type="text" placeholder="Paste regulation URL..." value={urlInput}
-                  onChange={function(e) { setUrlInput(e.target.value); setUrlError(""); }}
-                  onKeyDown={function(e) { if (e.key === "Enter") fetchFromUrl(urlInput); }}
-                  style={{ ...iStyle, flex: 1, fontSize: 11 }} />
-                <button onClick={function() { fetchFromUrl(urlInput); }} disabled={!urlInput.trim() || fetchingUrl}
-                  style={{ ...btnP, width: "auto", padding: "0 14px", opacity: !urlInput.trim() || fetchingUrl ? 0.5 : 1 }}>
-                  {fetchingUrl ? "..." : "→"}
-                </button>
-              </div>
-              {urlError && <div style={{ fontSize: 10, color: C.critical, marginTop: 5, lineHeight: 1.5 }}>{urlError}</div>}
-            </div>
-            <textarea placeholder="...or paste regulation text here" value={inputText} onChange={function(e) { setInputText(e.target.value); }}
-              rows={4} style={{ ...iStyle, resize: "none", lineHeight: 1.6, marginBottom: 8, display: "block" }} />
-            <button className="btnp" style={{ ...btnP, opacity: !inputText.trim() || analyzing || uploading ? 0.5 : 1 }}
-              onClick={addRegulation} disabled={!inputText.trim() || analyzing || uploading}>
-              {analyzing ? "↻ Analyzing..." : "→ Analyze Regulation"}
-            </button>
-          </div>
-
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ ...sLabel, marginBottom: 0 }}>Monitored Sources</span>
-              <button onClick={function() { setShowSources(true); }} style={{ fontSize: 10, color: C.accent, background: "transparent", border: "1px solid " + C.accent + "44", borderRadius: 4, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>✎ Manage</button>
-            </div>
-            {sources.map(function(src) {
-              return (
-                <button key={src.id} className="hov" title={src.description} style={btnS}
-                  onClick={function() { setUrlInput(src.url); fetchFromUrl(src.url); }}>
-                  <span>{src.icon}</span>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{src.label}</span>
-                </button>
-              );
-            })}
-            <button onClick={function() { setShowSources(true); }} style={{ ...btnS, color: C.accent, borderStyle: "dashed", marginBottom: 0 }}>
-              <span>+</span><span>Add source...</span>
-            </button>
-          </div>
-
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
-            <span style={sLabel}>Sample Regulations</span>
-            {SAMPLE_REGS.map(function(s, i) {
-              return (
-                <button key={i} className="hov" style={btnS} onClick={function() { loadSample(s); }}>
-                  <span>+</span><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title.split("—")[0].trim()}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          <div style={{ flex: 1 }}>
-            {regulations.length === 0
-              ? <div style={{ padding: "20px 18px", color: C.muted, fontSize: 11, textAlign: "center", lineHeight: 1.7 }}>No regulations yet. Upload, paste, or try a sample.</div>
-              : regulations.map(function(reg) {
-                  return (
-                    <div key={reg.id} className="hov"
-                      style={{ padding: "12px 18px", borderBottom: "1px solid " + C.border, cursor: "pointer", borderLeft: "3px solid " + (reg.inScope ? C.success : selected && selected.id === reg.id ? C.accent : "transparent"), background: selected && selected.id === reg.id ? C.accent + "0d" : "transparent" }}
-                      onClick={function() { setSelected(reg); setActiveTab("summary"); setMobileView("detail"); setShowMobileSidebar(false); }}>
-                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 6, marginBottom: 3 }}>
-                        <div style={{ fontSize: 11, fontWeight: "bold", color: C.text, lineHeight: 1.3 }}>{reg.title}</div>
-                        <button
-                          onClick={function(e) {
-                            e.stopPropagation();
-                            setRegulations(function(prev) {
-                              var updated = prev.map(function(r) { return r.id === reg.id ? Object.assign({}, r, { inScope: !r.inScope }) : r; });
-                              saveRegs(updated);
-                              return updated;
-                            });
-                            if (selected && selected.id === reg.id) setSelected(function(prev) { return Object.assign({}, prev, { inScope: !prev.inScope }); });
-                          }}
-                          style={{ background: reg.inScope ? C.success + "22" : "transparent", border: "1px solid " + (reg.inScope ? C.success + "66" : C.border), color: reg.inScope ? C.success : C.muted, borderRadius: 4, padding: "1px 6px", cursor: "pointer", fontSize: 9, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
-                          {reg.inScope ? "✓ In Scope" : "Set Scope"}
-                        </button>
-                      </div>
-                      <div style={{ fontSize: 9, color: C.muted, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {reg.loading
-                          ? <span style={{ color: C.accent }}>↻ Analyzing...</span>
-                          : reg.analysis
-                            ? <span style={{ color: riskColor(reg.analysis.riskLevel) }}>{"● " + reg.analysis.riskLevel + " Risk · " + (reg.analysis.controls || []).length + " Controls"}</span>
-                            : <span style={{ color: C.warning }}>⚠ Failed</span>}
-                        
-                      </div>
-                    </div>
-                  );
-                })}
-          </div>
+      <div className="flex flex-wrap gap-2 items-center">
+        <input value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Search controls…"
+          className="flex-1 min-w-48 bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500"/>
+        <select value={cat} onChange={e => setCat(e.target.value)} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
+          {categories.map(c => <option key={c}>{c}</option>)}
+        </select>
+        <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+          <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} className="accent-indigo-500"/>
+          Show all controls
+        </label>
+      </div>
+      {inScopeIds.size === 0 && !showAll && (
+        <div className="bg-amber-950/30 border border-amber-800/40 rounded-xl p-6 text-center">
+          <p className="text-amber-300 text-sm">No regulations are marked In Scope yet.</p>
+          <p className="text-amber-500 text-xs mt-1">Mark regulations as In Scope in the Inventory tab to see required controls.</p>
         </div>
-
-        {/* Main panel */}
-        <div className="main-panel" style={{ padding: "32px 40px", overflowY: "auto" }}>
-          {!selected ? (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "60vh", color: C.muted, textAlign: "center", gap: 16 }}>
-              <div style={{ fontSize: 52, opacity: 0.2 }}>⚖</div>
-              <div style={{ fontSize: 16, fontWeight: "bold", letterSpacing: "0.12em" }}>NO REGULATION SELECTED</div>
-              <div style={{ fontSize: 12, lineHeight: 1.8, maxWidth: 340 }}>Upload a file, paste text, import from a URL, or load a sample to generate an AI-powered compliance analysis.</div>
-              {IS_MOBILE && <button onClick={function() { setShowMobileSidebar(true); }}
-                style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "12px 28px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: "bold", letterSpacing: "0.1em", marginTop: 8 }}>
-                + Analyze a Regulation
-              </button>}
+      )}
+      <div className="grid gap-3">
+        {controls.map(ctrl => (
+          <div key={ctrl.controlId} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div className="flex items-start justify-between gap-3 mb-2">
+              <div>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-xs font-mono text-gray-500">{ctrl.controlId}</span>
+                  <Badge color={ctrl.priority==="Immediate"?"red":ctrl.priority==="Short-term"?"amber":"blue"} small>{ctrl.priority}</Badge>
+                </div>
+                <div className="font-semibold text-white">{ctrl.title}</div>
+              </div>
+              <Badge color="gray" small>{ctrl.category}</Badge>
             </div>
-          ) : selected.loading ? (
+            <p className="text-sm text-gray-400 leading-relaxed mb-3">{ctrl.description}</p>
+            <div className="text-xs text-gray-500 mb-2"><span className="text-gray-400 font-medium">Owner:</span> {ctrl.owner}</div>
+            <div className="text-xs text-gray-500 mb-3"><span className="text-gray-400 font-medium">Testing:</span> {ctrl.testingCriteria}</div>
+            {/* Source regulations */}
             <div>
-              <div style={{ fontSize: 18, fontWeight: "bold", marginBottom: 24, color: C.text }}>{selected.title}</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, color: C.muted, fontSize: 12 }}>
-                {[0,1,2].map(function(i) { return <span key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: C.accent, display: "inline-block", animation: "blink 1s " + (i * 0.3) + "s step-start infinite" }} />; })}
-                <span style={{ marginLeft: 6 }}>Running regulatory analysis...</span>
+              <div className="text-xs text-gray-500 font-medium mb-1.5">Required by:</div>
+              <div className="flex flex-wrap gap-1">
+                {ctrl.regulations.map(rId => (
+                  <span key={rId} className={`text-xs px-2 py-0.5 rounded-full border ${isInScope(rId) ? "border-emerald-700 bg-emerald-950/40 text-emerald-300" : "border-gray-700 bg-gray-800 text-gray-500"}`}>
+                    {rId} · {allRegs.find(r=>r.id===rId)?.name?.substring(0,30) || rId}{isInScope(rId) && " ✓"}
+                  </span>
+                ))}
               </div>
             </div>
-          ) : selected.error ? (
-            <div style={{ color: C.critical, padding: "24px 0", fontSize: 13, lineHeight: 1.7 }}>{"⚠ " + selected.error}</div>
-          ) : a ? (
-            <div className="fade-in">
-              {/* Mobile back button */}
-              {IS_MOBILE && <button onClick={function() { setMobileView("home"); setSelected(null); }}
-                style={{ display: "flex", background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 12, fontFamily: "inherit", marginBottom: 16, padding: 0, alignItems: "center", gap: 6 }}>
-                ← Back to list
-              </button>}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, gap: 16 }}>
-                <div style={{ flex: 1 }}>
-                  {a.instrumentType && (
-                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: C.accent3 + "22", border: "1px solid " + C.accent3 + "44", color: "#a78bfa", padding: "3px 10px", borderRadius: 4, fontSize: 10, fontWeight: "bold", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>
-                      {a.instrumentType === "Directive" ? "📘" : "📗"} {a.instrumentType}
-                    </div>
-                  )}
-                  <div style={{ fontSize: 18, fontWeight: "bold", marginBottom: 4, lineHeight: 1.3 }}>{a.fullName || selected.title}</div>
-                  <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                    {a.referenceNumber && <span style={{ fontSize: 11, color: C.accent, fontWeight: "bold" }}>{a.referenceNumber}</span>}
-                    <span style={{ fontSize: 11, color: C.muted }}>{"Added " + selected.addedAt}</span>
-                  </div>
-                </div>
-                <div style={{ background: riskColor(a.riskLevel) + "22", border: "1px solid " + riskColor(a.riskLevel) + "55", color: riskColor(a.riskLevel), padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: "bold", letterSpacing: "0.1em", whiteSpace: "nowrap", flexShrink: 0 }}>
-                  {"● " + (a.riskLevel || "").toUpperCase() + " RISK"}
-                </div>
-              </div>
+          </div>
+        ))}
+        {controls.length === 0 && (
+          <div className="text-center py-12 text-gray-500 text-sm">No controls match your filters</div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-              <div className="meta-3col" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 24 }}>
-                {[["Jurisdiction", a.jurisdiction, null], ["Effective Date", a.effectiveDate, null], ["Compliance Deadline", a.deadline, C.warning]].map(function(item) {
-                  return (
-                    <div key={item[0]} style={metaCard}>
-                      <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>{item[0]}</div>
-                      <div style={{ fontSize: 13, fontWeight: "bold", color: item[2] || C.text }}>{item[1] || "—"}</div>
-                    </div>
-                  );
-                })}
-              </div>
+// ── TIMELINE ──────────────────────────────────────────────────────────────────
+function Timeline({ allRegs, scopeMap }) {
+  const [filter, setFilter] = useState("All");
+  const withDeadlines = useMemo(() => {
+    let list = allRegs.filter(r => r.deadline);
+    if (filter === "In Scope") list = list.filter(r => (scopeMap[r.id]||"Pending") === "In Scope");
+    if (filter === "Upcoming") list = list.filter(r => daysUntil(r.deadline) !== null && daysUntil(r.deadline) >= 0);
+    return list.sort((a,b) => new Date(a.deadline) - new Date(b.deadline));
+  }, [allRegs, scopeMap, filter]);
 
+  const grouped = useMemo(() => {
+    const groups = {};
+    withDeadlines.forEach(r => {
+      const yr = r.deadline.substring(0,4);
+      if (!groups[yr]) groups[yr] = [];
+      groups[yr].push(r);
+    });
+    return groups;
+  }, [withDeadlines]);
 
-              {/* In Scope / Expiry Banner */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: selected.inScope ? C.success + "11" : C.panel, border: "1px solid " + (selected.inScope ? C.success + "44" : C.border) }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 10, color: selected.inScope ? C.success : C.muted, fontWeight: "bold", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                    {selected.inScope ? "✓ In Scope" : "Not In Scope"}
-                  </div>
-                </div>
-                <button
-                  onClick={function() {
-                    var updated = !selected.inScope;
-                    setRegulations(function(prev) {
-                      var next = prev.map(function(r) { return r.id === selected.id ? Object.assign({}, r, { inScope: updated }) : r; });
-                      saveRegs(next);
-                      return next;
-                    });
-                    setSelected(Object.assign({}, selected, { inScope: updated }));
-                  }}
-                  style={{ background: selected.inScope ? C.success + "22" : C.accent + "22", border: "1px solid " + (selected.inScope ? C.success + "66" : C.accent + "66"), color: selected.inScope ? C.success : C.accent, borderRadius: 6, padding: "6px 14px", cursor: "pointer", fontSize: 10, fontFamily: "inherit", fontWeight: "bold", whiteSpace: "nowrap" }}>
-                  {selected.inScope ? "✓ In Scope" : "Mark In Scope"}
-                </button>
-              </div>
-
-              <div className="tab-scroll" style={{ display: "flex", gap: 4, marginBottom: 24, borderBottom: "1px solid " + C.border, paddingBottom: 12 }}>
-                {["summary","mmc","controls","source"].map(function(tab) {
-                  return (
-                    <button key={tab} className={"tab " + (activeTab === tab ? "ton" : "toff")} onClick={function() { setActiveTab(tab); }}>
-                      {tab === "summary" ? "📋 Summary" : tab === "mmc" ? ("🏢 Marsh Scope (" + (a.mmcScope ? a.mmcScope.length : 0) + ")") : tab === "controls" ? ("⚡ Controls (" + (a.controls ? a.controls.length : 0) + ")") : "📄 Source"}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {activeTab === "summary" && (
-                <div>
-                  <div style={sHead}>◈ Executive Summary</div>
-                  <div style={sumBox}>{a.summary}</div>
-
-                  {a.overallRisk && (function() {
-                    var r = a.overallRisk;
-                    var rc = riskColor(r.rating);
-                    var score = Math.min(10, Math.max(1, r.score || 5));
-                    return (
-                      <div style={{ marginTop: 24 }}>
-                        <div style={sHead}>◈ Business Risk Rating</div>
-                        <div style={{ background: C.panel, border: "1px solid " + rc + "44", borderRadius: 12, overflow: "hidden" }}>
-                          <div style={{ background: rc + "18", borderBottom: "1px solid " + rc + "33", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                            <div>
-                              <div style={{ fontSize: 11, color: rc, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 4 }}>Overall Risk Level</div>
-                              <div style={{ fontSize: 22, fontWeight: "bold", color: rc }}>{r.rating}</div>
-                            </div>
-                            <div style={{ textAlign: "center" }}>
-                              <div style={{ fontSize: 28, fontWeight: "bold", color: rc, lineHeight: 1 }}>{score}</div>
-                              <div style={{ fontSize: 10, color: C.muted }}>/ 10</div>
-                              <div style={{ width: 80, height: 6, background: C.border, borderRadius: 3, marginTop: 6, overflow: "hidden" }}>
-                                <div style={{ width: (score * 10) + "%", height: "100%", background: rc, borderRadius: 3 }} />
-                              </div>
-                            </div>
-                          </div>
-                          <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.border, fontSize: 12, color: C.text, lineHeight: 1.6 }}>{r.summary}</div>
-                          <div className="risk-3col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr" }}>
-                            {[["💰 Financial", r.financialExposure, C.critical], ["📢 Reputational", r.reputationalExposure, C.warning], ["⚙️ Operational", r.operationalExposure, C.accent]].map(function(item, i) {
-                              return (
-                                <div key={item[0]} style={{ padding: "13px 16px", borderRight: i < 2 ? "1px solid " + C.border : "none", borderTop: "1px solid " + C.border }}>
-                                  <div style={{ fontSize: 10, color: item[2], letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 6 }}>{item[0]}</div>
-                                  <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{item[1]}</div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                          {r.mitigatingFactors && r.mitigatingFactors.length > 0 && (
-                            <div style={{ padding: "12px 20px", borderTop: "1px solid " + C.border, background: C.success + "08" }}>
-                              <div style={{ fontSize: 10, color: C.success, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>✓ Mitigating Factors</div>
-                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                {r.mitigatingFactors.map(function(f, i) {
-                                  return <span key={i} style={{ background: C.success + "15", border: "1px solid " + C.success + "33", color: C.success, padding: "3px 10px", borderRadius: 4, fontSize: 11 }}>{f}</span>;
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {a.impactAreas && a.impactAreas.length > 0 && (
-                    <div style={{ marginTop: 24 }}>
-                      <div style={sHead}>◈ Impact Areas</div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {a.impactAreas.map(function(area, i) {
-                          return <span key={i} style={{ padding: "3px 10px", borderRadius: 4, fontSize: 11, fontWeight: "bold", background: C.accent3 + "22", border: "1px solid " + C.accent3 + "44", color: C.accent }}>{area}</span>;
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {a.chapters && a.chapters.length > 0 && (
-                    <div style={{ marginTop: 24 }}>
-                      <div style={sHead}>◈ Document Structure — Key Chapters</div>
-                      <div style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 10, overflow: "hidden" }}>
-                        {a.chapters.map(function(ch, i) {
-                          return (
-                            <div key={i} style={{ display: "flex", gap: 14, padding: "10px 16px", borderBottom: i < a.chapters.length - 1 ? "1px solid " + C.border : "none", alignItems: "baseline" }}>
-                              <div style={{ fontSize: 10, color: C.accent, fontWeight: "bold", letterSpacing: "0.1em", flexShrink: 0, minWidth: 90 }}>{ch.number}</div>
-                              <div style={{ fontSize: 12, color: C.text }}>{ch.title}</div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  <div style={{ marginTop: 24 }}>
-                    <div style={sHead}>◈ Key Legislative Provisions</div>
-                    {[
-                      { label: "Transitional Period", icon: "⏳", value: a.transitionalPeriod },
-                      { label: "Transposition Date", icon: "📅", value: a.transpositionDate },
-                      { label: "Repeal of Existing Legislation", icon: "🗑", value: a.repealOfLegislation },
-                      { label: "Entry into Force", icon: "✅", value: a.entryIntoForce },
-                    ].map(function(item) {
-                      var isNA = !item.value || item.value === "N/A";
-                      return (
-                        <div key={item.label} style={{ background: C.panel, border: "1px solid " + (isNA ? C.border : C.accent + "44"), borderRadius: 10, overflow: "hidden", marginBottom: 10 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", borderBottom: isNA ? "none" : "1px solid " + C.border, background: isNA ? "transparent" : C.accent + "0a" }}>
-                            <span style={{ fontSize: 14 }}>{item.icon}</span>
-                            <span style={{ fontSize: 10, fontWeight: "bold", letterSpacing: "0.15em", color: isNA ? C.muted : C.accent, textTransform: "uppercase" }}>{item.label}</span>
-                            {isNA && <span style={{ marginLeft: "auto", fontSize: 10, color: C.muted, background: C.border, padding: "1px 7px", borderRadius: 3 }}>N/A</span>}
-                          </div>
-                          {!isNA && <div style={{ padding: "12px 16px", fontSize: 12, color: C.text, lineHeight: 1.7, fontStyle: "italic", whiteSpace: "pre-wrap" }}>{item.value}</div>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              
-
-              {activeTab === "controls" && (
-                <div>
-                  {(function() {
-                    var allControls = getAllControls(regulations, selected.id);
-                    var controls = a.controls || [];
-                    var newCount = controls.filter(function(c) { return !isDuplicate(c.title, allControls); }).length;
-                    var existCount = controls.length - newCount;
-                    return (
-                      <div>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-                          <div style={sHead}>◈ Compliance Controls</div>
-                          <div style={{ display: "flex", gap: 8 }}>
-                            {newCount > 0 && <span style={{ fontSize: 9, padding: "3px 9px", borderRadius: 3, background: C.accent + "22", border: "1px solid " + C.accent + "44", color: C.accent, fontWeight: "bold" }}>{newCount + " NEW"}</span>}
-                            {existCount > 0 && <span style={{ fontSize: 9, padding: "3px 9px", borderRadius: 3, background: C.border, color: C.muted, fontWeight: "bold" }}>{existCount + " EXISTING"}</span>}
-                          </div>
-                        </div>
-                        {existCount > 0 && newCount > 0 && <div style={{ fontSize: 10, color: C.warning, marginBottom: 14, padding: "8px 12px", background: C.warning + "11", border: "1px solid " + C.warning + "33", borderRadius: 6 }}>⚠ Controls marked EXISTING already appear in a previously analysed regulation. Focus on NEW controls for the incremental delta.</div>}
-                        {controls.map(function(ctrl, i) {
-                          var dupMatch = isDuplicate(ctrl.title, allControls);
-                          var isNew = !dupMatch;
-                          var open = !!openActions[i];
-                          var catColor = { Governance: "#7c3aed", Risk: C.critical, Compliance: C.warning, Technology: C.accent, Operational: "#10b981", Reporting: "#f59e0b" }[ctrl.category] || C.muted;
-                          return (
-                            <div key={i} style={{ background: C.panel, border: "1px solid " + (isNew ? C.accent + "44" : C.border), borderLeft: "3px solid " + (isNew ? C.accent : C.border), borderRadius: 9, marginBottom: 10, overflow: "hidden", opacity: isNew ? 1 : 0.65 }}>
-                              <div style={{ padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start", cursor: "pointer" }} onClick={function() { setOpenActions(function(prev) { return Object.assign({}, prev, { [i]: !prev[i] }); }); }}>
-                                <div style={{ background: C.accent + "22", border: "1px solid " + C.accent + "44", color: C.accent, width: 52, height: 22, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: "bold", flexShrink: 0, letterSpacing: "0.05em" }}>{ctrl.controlId || ("CTRL-" + String(i+1).padStart(3,"0"))}</div>
-                                <div style={{ flex: 1 }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4, flexWrap: "wrap" }}>
-                                    <div style={{ fontSize: 12, fontWeight: "bold", color: isNew ? C.text : C.muted }}>{ctrl.title}</div>
-                                    <span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 3, background: isNew ? C.accent + "22" : C.border, border: "1px solid " + (isNew ? C.accent + "44" : C.border), color: isNew ? C.accent : C.muted, fontWeight: "bold", letterSpacing: "0.08em" }}>{isNew ? "NEW" : "EXISTING"}</span>
-                                    {ctrl.category && <span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 3, background: catColor + "22", border: "1px solid " + catColor + "44", color: catColor, fontWeight: "bold" }}>{ctrl.category}</span>}
-                                  </div>
-                                  <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, marginBottom: 6 }}>{ctrl.description}</div>
-                                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                                    {ctrl.priority && <span style={{ padding: "2px 7px", borderRadius: 3, fontSize: 9, fontWeight: "bold", ...(ctrl.priority === "Immediate" ? { background: "#ef444422", border: "1px solid #ef444444", color: "#ef4444" } : ctrl.priority === "Short-term" ? { background: "#f59e0b22", border: "1px solid #f59e0b44", color: "#f59e0b" } : { background: "#10b98122", border: "1px solid #10b98144", color: "#10b981" }) }}>{ctrl.priority}</span>}
-                                    {ctrl.owner && <span style={{ padding: "2px 7px", borderRadius: 3, fontSize: 9, background: C.border, color: C.muted }}>{"Owner: " + ctrl.owner}</span>}
-                                    {ctrl.articleReference && <span style={{ padding: "2px 7px", borderRadius: 3, fontSize: 9, background: C.accent3 + "22", border: "1px solid " + C.accent3 + "33", color: "#a78bfa" }}>{ctrl.articleReference}</span>}
-                                    {dupMatch && <span style={{ padding: "2px 7px", borderRadius: 3, fontSize: 9, background: C.border, color: C.muted }}>{"See: " + dupMatch.regTitle}</span>}
-                                  </div>
-                                </div>
-                                <span style={{ color: C.muted, fontSize: 10, flexShrink: 0, marginTop: 4, display: "inline-block", transform: open ? "rotate(180deg)" : "none" }}>▼</span>
-                              </div>
-                              {open && (
-                                <div style={{ borderTop: "1px solid " + C.border, padding: "12px 16px 16px 80px" }}>
-                                  {ctrl.steps && ctrl.steps.length > 0 && (
-                                    <div style={{ marginBottom: 12 }}>
-                                      <div style={{ fontSize: 9, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 9 }}>◈ Implementation Steps</div>
-                                      {ctrl.steps.map(function(step, si) {
-                                        return (
-                                          <div key={si} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 7 }}>
-                                            <div style={{ background: C.accent3 + "33", border: "1px solid " + C.accent3 + "55", color: "#a78bfa", width: 18, height: 18, borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: "bold", flexShrink: 0, marginTop: 1 }}>{si + 1}</div>
-                                            <div style={{ fontSize: 11, color: C.text, lineHeight: 1.6 }}>{String(step).replace(/^Step \d+:\s*/i, "")}</div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
-                                  {ctrl.testingCriteria && (
-                                    <div style={{ background: C.success + "11", border: "1px solid " + C.success + "33", borderRadius: 6, padding: "9px 12px", display: "flex", gap: 8 }}>
-                                      <span style={{ color: C.success, flexShrink: 0, fontSize: 12 }}>✓</span>
-                                      <div>
-                                        <div style={{ fontSize: 9, letterSpacing: "0.1em", color: C.success, textTransform: "uppercase", marginBottom: 3 }}>Testing Criteria</div>
-                                        <div style={{ fontSize: 11, color: C.text, lineHeight: 1.5 }}>{ctrl.testingCriteria}</div>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                        {controls.length > 0 && (
-                          <div style={{ marginTop: 16, padding: "12px 16px", background: C.panel, border: "1px solid " + C.border, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                            <div>
-                              <div style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>Export new controls to downstream system</div>
-                              <div style={{ fontSize: 9, color: C.muted }}>{newCount + " new controls · " + controls.length + " total"}</div>
-                            </div>
-                            <button
-                              onClick={function() {
-                                var newControls = controls.filter(function(c) { return !isDuplicate(c.title, allControls); });
-                                var payload = { regulationId: selected.id, regulationTitle: selected.title, reference: a.referenceNumber, exportedAt: new Date().toISOString(), controls: newControls };
-                                var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-                                var url = URL.createObjectURL(blob);
-                                var link = document.createElement("a");
-                                link.href = url; link.download = "controls-" + (a.referenceNumber || selected.id) + ".json";
-                                link.click(); URL.revokeObjectURL(url);
-                              }}
-                              style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "7px 16px", borderRadius: 6, cursor: "pointer", fontSize: 10, fontFamily: "inherit", fontWeight: "bold" }}>
-                              ↓ Export New Controls (JSON)
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
-
-              {activeTab === "mmc" && (
-                <div>
-                  <div style={sHead}>◈ Marsh Entity Scope Assessment</div>
-                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 20, lineHeight: 1.6 }}>AI-assessed scope across Marsh group entities. Always validate with legal counsel.</div>
-                  <div style={{ marginBottom: 20 }}>
-                    <div style={{ fontSize: 10, letterSpacing: "0.15em", color: C.critical, textTransform: "uppercase", marginBottom: 10 }}>{"● In Scope (" + (a.mmcScope ? a.mmcScope.filter(function(e) { return e.inScope; }).length : 0) + " entities)"}</div>
-                    {a.mmcScope && a.mmcScope.filter(function(e) { return e.inScope; }).map(function(e, i) {
-                      return (
-                        <div key={i} style={{ background: C.panel, border: "1px solid " + C.critical + "33", borderLeft: "3px solid " + C.critical, borderRadius: 8, padding: "12px 16px", marginBottom: 8, display: "flex", gap: 12 }}>
-                          <span style={{ fontSize: 16, flexShrink: 0 }}>🏢</span>
-                          <div><div style={{ fontSize: 13, fontWeight: "bold", color: C.text, marginBottom: 3 }}>{e.entity}</div><div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{e.reason}</div></div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, letterSpacing: "0.15em", color: C.success, textTransform: "uppercase", marginBottom: 10 }}>{"● Out of Scope (" + (a.mmcScope ? a.mmcScope.filter(function(e) { return !e.inScope; }).length : 0) + " entities)"}</div>
-                    {a.mmcScope && a.mmcScope.filter(function(e) { return !e.inScope; }).map(function(e, i) {
-                      return (
-                        <div key={i} style={{ background: C.panel, border: "1px solid " + C.border, borderLeft: "3px solid " + C.success, borderRadius: 8, padding: "12px 16px", marginBottom: 8, display: "flex", gap: 12 }}>
-                          <span style={{ fontSize: 16, flexShrink: 0, opacity: 0.4 }}>🏢</span>
-                          <div><div style={{ fontSize: 13, fontWeight: "bold", color: C.muted, marginBottom: 3 }}>{e.entity}</div><div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{e.reason}</div></div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {activeTab === "source" && (
-                <div>
-                  <div style={sHead}>◈ Source Text</div>
-                  <div style={{ ...sumBox, whiteSpace: "pre-wrap", fontSize: 12, color: C.muted, maxHeight: 500, overflowY: "auto" }}>{selected.text}</div>
-                </div>
-              )}
-            </div>
-          ) : null}
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-white">Regulatory Timeline</h1>
+          <p className="text-sm text-gray-400">{withDeadlines.length} regulations with deadlines</p>
         </div>
-      </div>}
-
-      {/* Dashboard / Inventory View */}
-      {appView === "dashboard" && (
-        <div style={{ padding: "24px 32px", overflowY: "auto", minHeight: "calc(100vh - 65px)" }}>
-          {(function() {
-            var byRegion = {};
-            var byDomain = {};
-            var byStatus = {};
-            REGULATIONS.filter(function(r) { return r.marshRelevant; }).forEach(function(r) {
-              byRegion[r.region] = (byRegion[r.region] || 0) + 1;
-              byDomain[r.domain] = (byDomain[r.domain] || 0) + 1;
-              byStatus[r.status] = (byStatus[r.status] || 0) + 1;
-            });
-            var totalMarsh = REGULATIONS.filter(function(r) { return r.marshRelevant; }).length;
-            var totalAll = REGULATIONS.length;
-            var totalControls = CONTROLS_LIBRARY.length;
-            var domColors = { "Financial Services": C.accent, "Data Privacy": "#a78bfa", "ESG": C.success, "Cybersecurity": C.warning, "AML / Financial Crime": C.critical, "Insurance": "#06b6d4", "Legal": "#f97316", "Compliance": "#8b5cf6" };
-
-
-
-            return (
-              <div>
-                {/* Summary cards */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 24 }}>
-                  {[
-                    { label: "Total Regulations", value: totalAll, sub: "in global inventory", color: C.accent },
-                    { label: "Marsh Relevant", value: totalMarsh, sub: "in scope for Marsh", color: C.success },
-                    { label: "Compliance Controls", value: totalControls, sub: "in controls library", color: "#a78bfa" },
-                    { label: "Jurisdictions", value: REGIONS.length, sub: "regions covered", color: C.warning },
-                  ].map(function(card) {
-                    return (
-                      <div key={card.label} style={{ background: C.panel, border: "1px solid " + card.color + "44", borderRadius: 10, padding: "16px 18px" }}>
-                        <div style={{ fontSize: 9, color: C.muted, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 6 }}>{card.label}</div>
-                        <div style={{ fontSize: 28, fontWeight: "bold", color: card.color, lineHeight: 1, marginBottom: 4 }}>{card.value}</div>
-                        <div style={{ fontSize: 10, color: C.muted }}>{card.sub}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-
-
-                {/* Domain breakdown */}
-                <div>
-                  <div style={{ fontSize: 10, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 14 }}>◈ Marsh-Relevant Regulations by Domain</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8 }}>
-                    {Object.keys(byDomain).sort(function(a,b) { return byDomain[b]-byDomain[a]; }).map(function(domain) {
-                      var dc = domColors[domain] || C.muted;
-                      return (
-                        <div key={domain} style={{ background: C.panel, border: "1px solid " + dc + "33", borderRadius: 8, padding: "14px 16px", cursor: "pointer", display: "flex", alignItems: "center", gap: 12 }}
-                          onClick={function() { setAppView("inventory"); setInvFilter(function(f) { return Object.assign({}, f, { domain: domain }); }); }}>
-                          <div style={{ fontSize: 22, fontWeight: "bold", color: dc, lineHeight: 1, flexShrink: 0 }}>{byDomain[domain]}</div>
-                          <div style={{ fontSize: 11, color: C.text, lineHeight: 1.3 }}>{domain}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-        </div>
+        <select value={filter} onChange={e => setFilter(e.target.value)} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
+          <option>All</option><option>In Scope</option><option>Upcoming</option>
+        </select>
+      </div>
+      {Object.keys(grouped).length === 0 && (
+        <div className="text-center py-16 text-gray-500 text-sm">No regulations with deadlines match your filter</div>
       )}
-
-      {/* Inventory View */}
-      {appView === "inventory" && (
-        <div style={{ padding: "24px 32px", overflowY: "auto", minHeight: "calc(100vh - 65px)" }}>
-          {(function() {
-            var filtered = REGULATIONS.filter(function(r) {
-              if (invFilter.marshOnly && !r.marshRelevant) return false;
-              if (invFilter.region !== "All" && r.region !== invFilter.region) return false;
-              if (invFilter.domain !== "All" && r.domain !== invFilter.domain) return false;
-              if (invFilter.status !== "All" && r.status !== invFilter.status) return false;
-              if (invFilter.search) {
-                var q = invFilter.search.toLowerCase();
-                return r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.summary.toLowerCase().includes(q);
-              }
-              return true;
-            });
-            var ctrlFiltered = CONTROLS_LIBRARY.filter(function(c) {
-              if (ctrlFilter.category !== "All" && c.category !== ctrlFilter.category) return false;
-              if (ctrlFilter.search) {
-                var q = ctrlFilter.search.toLowerCase();
-                return c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q);
-              }
-              return true;
-            });
-            var domColors = { "Financial Services": C.accent, "Data Privacy": "#a78bfa", "ESG": C.success, "Cybersecurity": C.warning, "AML / Financial Crime": C.critical, "Insurance": "#06b6d4", "Legal": "#f97316", "Compliance": "#8b5cf6" };
-
-            return (
-              <div>
-                {/* Tabs */}
-                <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid " + C.border, paddingBottom: 10 }}>
-                  <button className={"tab " + (dashTab === "inventory" ? "ton" : "toff")} onClick={function() { setDashTab("inventory"); }}>📋 Regulation Inventory ({filtered.length})</button>
-                  <button className={"tab " + (dashTab === "controls" ? "ton" : "toff")} onClick={function() { setDashTab("controls"); }}>⚡ Controls Library ({CONTROLS_LIBRARY.length})</button>
-                </div>
-
-                {dashTab === "inventory" && (
-                  <div>
-                    <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-                      <input type="text" placeholder="Search regulations..." value={invFilter.search}
-                        onChange={function(e) { setInvFilter(function(f) { return Object.assign({}, f, { search: e.target.value }); }); }}
-                        style={{ background: "#0a0f1a", border: "1px solid " + C.border, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "6px 10px", outline: "none", width: 220 }} />
-                      {[
-                        { key: "region", options: ["All"].concat(REGIONS) },
-                        { key: "domain", options: ["All"].concat(DOMAINS) },
-                        { key: "status", options: ["All", "In Force", "Proposed", "Upcoming"] },
-                      ].map(function(f) {
-                        return (
-                          <select key={f.key} value={invFilter[f.key]}
-                            onChange={function(e) { var v = e.target.value; setInvFilter(function(prev) { return Object.assign({}, prev, { [f.key]: v }); }); }}
-                            style={{ background: "#0a0f1a", border: "1px solid " + C.border, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "6px 10px", outline: "none", cursor: "pointer" }}>
-                            {f.options.map(function(o) { return <option key={o} value={o}>{o}</option>; })}
-                          </select>
-                        );
-                      })}
-                      <button onClick={function() { setInvFilter(function(f) { return Object.assign({}, f, { marshOnly: !f.marshOnly }); }); }}
-                        style={{ background: invFilter.marshOnly ? C.success + "22" : "transparent", border: "1px solid " + (invFilter.marshOnly ? C.success + "66" : C.border), color: invFilter.marshOnly ? C.success : C.muted, padding: "5px 12px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>
-                        {invFilter.marshOnly ? "✓ Marsh Relevant" : "All Regulations"}
-                      </button>
-                      <button onClick={function() { setInvFilter({ region: "All", domain: "All", status: "All", marshOnly: true, search: "" }); }}
-                        style={{ background: "transparent", border: "1px solid " + C.border, color: C.muted, padding: "5px 10px", borderRadius: 6, cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>↺ Reset</button>
-                    </div>
-                    <div style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 10, overflow: "hidden" }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "80px 1fr 120px 100px 100px 80px 90px", gap: 0, padding: "10px 14px", borderBottom: "1px solid " + C.border, background: "#0a0f1a" }}>
-                        {["ID","Regulation","Reference","Region","Domain","Status",""].map(function(h) {
-                          return <div key={h} style={{ fontSize: 9, color: C.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>{h}</div>;
-                        })}
+      <div className="space-y-8">
+        {Object.entries(grouped).sort().map(([year, regs]) => (
+          <div key={year}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="text-lg font-bold text-indigo-400">{year}</div>
+              <div className="h-px flex-1 bg-gray-800"/>
+              <span className="text-xs text-gray-500">{regs.length} deadline{regs.length!==1?"s":""}</span>
+            </div>
+            <div className="relative pl-6 space-y-3">
+              <div className="absolute left-2 top-2 bottom-2 w-px bg-gray-800"/>
+              {regs.map(r => {
+                const days = daysUntil(r.deadline);
+                const currentScope = scopeMap[r.id] || "Pending";
+                return (
+                  <div key={r.id} className="relative flex items-start gap-4">
+                    <div className="absolute -left-4 w-3 h-3 rounded-full border-2 mt-1" style={{borderColor: urgencyColor(days), backgroundColor: days !== null && days < 0 ? urgencyColor(days) : "transparent"}}/>
+                    <div className="flex-1 bg-gray-900 border border-gray-800 rounded-lg p-3 hover:border-gray-700 transition">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-white text-sm leading-tight">{r.name}</div>
+                          <div className="text-xs text-gray-500 mt-0.5">{r.reference} · {r.region} · {r.domain}</div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <div className="font-semibold text-sm" style={{color:urgencyColor(days)}}>{formatDeadline(r.deadline)}</div>
+                          {days !== null && <div className="text-xs text-gray-500">{days < 0 ? `${Math.abs(days)}d past` : days === 0 ? "Today" : `${days}d`}</div>}
+                          <Badge color={scopeBadge(currentScope)} small>{currentScope}</Badge>
+                        </div>
                       </div>
-                      {filtered.length === 0 && <div style={{ padding: "20px", color: C.muted, fontSize: 11, textAlign: "center" }}>No regulations match your filters.</div>}
-                      {filtered.map(function(reg) {
-                        var sc = { "In Force": C.success, "Proposed": C.warning, "Upcoming": C.accent }[reg.status] || C.muted;
-                        var dc = domColors[reg.domain] || C.muted;
-                        return (
-                          <div key={reg.id} className="hov" style={{ display: "grid", gridTemplateColumns: "80px 1fr 120px 100px 100px 80px 90px", gap: 0, padding: "10px 14px", borderBottom: "1px solid " + C.border, alignItems: "center" }}>
-                            <div style={{ fontSize: 9, color: C.accent, fontWeight: "bold" }}>{reg.id}</div>
-                            <div>
-                              <div style={{ fontSize: 11, fontWeight: "bold", color: C.text, marginBottom: 2 }}>{reg.name}</div>
-                              <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4 }}>{reg.summary}</div>
-                            </div>
-                            <div style={{ fontSize: 9, color: C.muted }}>{reg.reference}</div>
-                            <div style={{ fontSize: 9, color: C.muted }}>{reg.region}</div>
-                            <div style={{ fontSize: 9, color: dc, fontWeight: "bold" }}>{reg.domain}</div>
-                            <div><span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 3, background: sc + "22", border: "1px solid " + sc + "44", color: sc, fontWeight: "bold", whiteSpace: "nowrap" }}>{reg.status}</span></div>
-                            <div style={{ display: "flex", gap: 5 }}>
-                              <a href={reg.source} target="_blank" rel="noopener noreferrer"
-                                style={{ fontSize: 9, color: C.muted, textDecoration: "none", background: C.border, padding: "2px 7px", borderRadius: 3 }}>↗</a>
-                              <button onClick={function() {
-                                setInputTitle(reg.name);
-                                setInputText(reg.name + " (" + reg.reference + "). " + reg.summary + " Region: " + reg.region + ". Domain: " + reg.domain + ". Effective: " + reg.effectiveDate + ". Source: " + reg.source);
-                                setAppView("analyze");
-                              }} style={{ fontSize: 9, color: C.accent, background: C.accent + "18", border: "1px solid " + C.accent + "33", padding: "2px 7px", borderRadius: 3, cursor: "pointer", fontFamily: "inherit" }}>Analyse</button>
-                            </div>
-                          </div>
-                        );
-                      })}
                     </div>
                   </div>
-                )}
-
-                {dashTab === "controls" && (
-                  <div>
-                    <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-                      <input type="text" placeholder="Search controls..." value={ctrlFilter.search}
-                        onChange={function(e) { setCtrlFilter(function(f) { return Object.assign({}, f, { search: e.target.value }); }); }}
-                        style={{ background: "#0a0f1a", border: "1px solid " + C.border, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "6px 10px", outline: "none", width: 220 }} />
-                      <select value={ctrlFilter.category}
-                        onChange={function(e) { var v = e.target.value; setCtrlFilter(function(f) { return Object.assign({}, f, { category: v }); }); }}
-                        style={{ background: "#0a0f1a", border: "1px solid " + C.border, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "6px 10px", outline: "none" }}>
-                        {["All","Data Privacy","Cybersecurity","AML / Financial Crime","Financial Services","Compliance","ESG","Legal"].map(function(o) { return <option key={o} value={o}>{o}</option>; })}
-                      </select>
-                      <button onClick={function() {
-                        var payload = { exportedAt: new Date().toISOString(), totalControls: CONTROLS_LIBRARY.length, controls: CONTROLS_LIBRARY };
-                        var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-                        var url = URL.createObjectURL(blob);
-                        var link = document.createElement("a");
-                        link.href = url; link.download = "marsh-controls-library.json";
-                        link.click(); URL.revokeObjectURL(url);
-                      }} style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit", fontWeight: "bold" }}>
-                        ↓ Export Controls (JSON)
-                      </button>
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      {ctrlFiltered.map(function(ctrl) {
-                        var catColor = { "Data Privacy": "#a78bfa", "Cybersecurity": C.warning, "AML / Financial Crime": C.critical, "Financial Services": C.accent, "Compliance": "#8b5cf6", "ESG": C.success, "Legal": "#f97316" }[ctrl.category] || C.muted;
-                        var pc = ctrl.priority === "Immediate" ? C.critical : ctrl.priority === "Short-term" ? C.warning : C.success;
-                        return (
-                          <div key={ctrl.controlId} style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 9, padding: "14px 18px", display: "flex", gap: 14, alignItems: "flex-start" }}>
-                            <div style={{ background: C.accent + "22", border: "1px solid " + C.accent + "44", color: C.accent, padding: "3px 8px", borderRadius: 5, fontSize: 9, fontWeight: "bold", flexShrink: 0, letterSpacing: "0.05em", marginTop: 2 }}>{ctrl.controlId}</div>
-                            <div style={{ flex: 1 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-                                <div style={{ fontSize: 12, fontWeight: "bold", color: C.text }}>{ctrl.title}</div>
-                                <span style={{ fontSize: 8, padding: "2px 7px", borderRadius: 3, background: catColor + "22", border: "1px solid " + catColor + "44", color: catColor, fontWeight: "bold" }}>{ctrl.category}</span>
-                                <span style={{ fontSize: 8, padding: "2px 7px", borderRadius: 3, background: pc + "22", border: "1px solid " + pc + "44", color: pc, fontWeight: "bold" }}>{ctrl.priority}</span>
-                              </div>
-                              <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, marginBottom: 6 }}>{ctrl.description}</div>
-                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                                <span style={{ fontSize: 9, color: C.muted }}>Owner: {ctrl.owner}</span>
-                                <span style={{ fontSize: 9, color: C.muted }}>|</span>
-                                <span style={{ fontSize: 9, color: C.muted }}>Regs: {ctrl.regulations.join(", ")}</span>
-                              </div>
-                              <div style={{ marginTop: 6, fontSize: 9, color: C.success, background: C.success + "11", border: "1px solid " + C.success + "22", borderRadius: 4, padding: "3px 8px", display: "inline-block" }}>✓ {ctrl.testingCriteria}</div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-        </div>
-      )}
-
-      {showSources && <SourcesModal sources={sources} setSources={updateSources} onClose={function() { setShowSources(false); }} />}
-      {showScanner && <ScannerModal scanning={scanning} scanProgress={scanProgress} scanResults={scanResults} onClose={function() { setShowScanner(false); }} onRescan={scanAllSources} onAnalyse={handleAnalyseFromScan} />}
-
-      {/* Mobile Sidebar Drawer */}
-      {IS_MOBILE && showMobileSidebar && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex" }}>
-          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.7)" }} onClick={function() { setShowMobileSidebar(false); }} />
-          <div style={{ position: "relative", width: "88vw", maxWidth: 360, background: C.panel, borderRight: "1px solid " + C.border, overflowY: "auto", animation: "slideUp 0.25s ease", zIndex: 1, display: "flex", flexDirection: "column" }}>
-            <div style={{ padding: "14px 16px", borderBottom: "1px solid " + C.border, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 12, fontWeight: "bold", color: C.accent, letterSpacing: "0.1em" }}>DELPHI</span>
-              <button onClick={function() { setShowMobileSidebar(false); }} style={{ background: "transparent", border: "none", color: C.muted, fontSize: 20, cursor: "pointer" }}>✕</button>
-            </div>
-            <div style={{ padding: "14px 16px", borderBottom: "1px solid " + C.border }}>
-              <span style={{ fontSize: 9, color: C.muted, letterSpacing: "0.18em", textTransform: "uppercase", marginBottom: 7, display: "block" }}>Ingest Regulation</span>
-              <input type="text" placeholder="Title (optional)..." value={inputTitle} onChange={function(e) { setInputTitle(e.target.value); }} style={{ ...iStyle, marginBottom: 8, display: "block" }} />
-              <UploadZone onFile={handleFileUpload} uploading={uploading} />
-              <textarea placeholder="Paste regulation text..." value={inputText} onChange={function(e) { setInputText(e.target.value); }} rows={4} style={{ ...iStyle, resize: "none", lineHeight: 1.6, marginBottom: 8, display: "block" }} />
-              <button className="btnp" style={{ ...btnP, opacity: !inputText.trim() || analyzing || uploading ? 0.5 : 1 }} onClick={function() { setShowMobileSidebar(false); addRegulation(); }} disabled={!inputText.trim() || analyzing || uploading}>
-                {analyzing ? "↻ Analyzing..." : "→ Analyze"}
-              </button>
-            </div>
-            <div style={{ padding: "12px 16px", borderBottom: "1px solid " + C.border }}>
-              <span style={{ fontSize: 9, color: C.muted, letterSpacing: "0.18em", textTransform: "uppercase", marginBottom: 7, display: "block" }}>Sample Regulations</span>
-              {SAMPLE_REGS.map(function(s, i) {
-                return <button key={i} className="hov" style={btnS} onClick={function() { setShowMobileSidebar(false); loadSample(s); }}><span>+</span><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title.split("—")[0].trim()}</span></button>;
+                );
               })}
             </div>
-            <div style={{ flex: 1, overflowY: "auto" }}>
-              <div style={{ padding: "10px 16px 4px", fontSize: 9, color: C.muted, letterSpacing: "0.18em", textTransform: "uppercase" }}>Analyzed Regulations</div>
-              {regulations.length === 0
-                ? <div style={{ padding: "12px 16px", color: C.muted, fontSize: 10, lineHeight: 1.6 }}>No regulations yet.</div>
-                : regulations.map(function(reg) {
-                    return (
-                      <div key={reg.id} className="hov"
-                        style={{ padding: "11px 16px", borderBottom: "1px solid " + C.border, cursor: "pointer", borderLeft: "3px solid " + (reg.inScope ? C.success : selected && selected.id === reg.id ? C.accent : "transparent") }}
-                        onClick={function() { setSelected(reg); setActiveTab("summary"); setMobileView("detail"); setShowMobileSidebar(false); }}>
-                        <div style={{ fontSize: 11, fontWeight: "bold", color: C.text, marginBottom: 3 }}>{reg.title}</div>
-                        <div style={{ fontSize: 9, color: C.muted }}>
-                          {reg.loading ? <span style={{ color: C.accent }}>↻ Analyzing...</span>
-                            : reg.analysis ? <span style={{ color: riskColor(reg.analysis.riskLevel) }}>{"● " + reg.analysis.riskLevel + " · " + (reg.analysis.controls || []).length + " Controls"}</span>
-                            : <span style={{ color: C.warning }}>⚠ Failed</span>}
-                        </div>
-                      </div>
-                    );
-                  })}
-            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── CALENDAR ──────────────────────────────────────────────────────────────────
+function Calendar({ allRegs, scopeMap }) {
+  const today = new Date();
+  const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [filter, setFilter] = useState("All");
+
+  const withDeadlines = useMemo(() => {
+    let list = allRegs.filter(r => r.deadline);
+    if (filter === "In Scope") list = list.filter(r => (scopeMap[r.id]||"Pending") === "In Scope");
+    return list;
+  }, [allRegs, scopeMap, filter]);
+
+  const month = viewDate.getMonth();
+  const year = viewDate.getFullYear();
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month+1, 0).getDate();
+
+  const regsByDay = useMemo(() => {
+    const m = {};
+    withDeadlines.forEach(r => {
+      const d = new Date(r.deadline + "T00:00:00");
+      if (d.getMonth() === month && d.getFullYear() === year) {
+        const day = d.getDate();
+        if (!m[day]) m[day] = [];
+        m[day].push(r);
+      }
+    });
+    return m;
+  }, [withDeadlines, month, year]);
+
+  const selectedRegs = selectedDay ? regsByDay[selectedDay] || [] : [];
+  const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-white">Regulatory Calendar</h1>
+          <p className="text-sm text-gray-400">{withDeadlines.filter(r => { const d = new Date(r.deadline+"T00:00:00"); return d.getMonth()===month&&d.getFullYear()===year; }).length} deadlines in {months[month]} {year}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select value={filter} onChange={e => setFilter(e.target.value)} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
+            <option>All</option><option>In Scope</option>
+          </select>
+          <button onClick={() => setViewDate(new Date(year, month-1, 1))} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition">←</button>
+          <span className="text-sm font-semibold text-white w-36 text-center">{months[month]} {year}</span>
+          <button onClick={() => setViewDate(new Date(year, month+1, 1))} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition">→</button>
+          <button onClick={() => { setViewDate(new Date(today.getFullYear(), today.getMonth(), 1)); setSelectedDay(null); }} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-sm text-gray-300 rounded-lg transition">Today</button>
+        </div>
+      </div>
+      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+        <div className="grid grid-cols-7 border-b border-gray-800">
+          {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => (
+            <div key={d} className="py-2 text-center text-xs font-medium text-gray-500">{d}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7">
+          {Array.from({length: firstDay}).map((_,i) => <div key={`empty-${i}`} className="min-h-16 border-r border-b border-gray-800 bg-gray-950/30"/>)}
+          {Array.from({length: daysInMonth}).map((_,i) => {
+            const day = i+1;
+            const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
+            const hasRegs = regsByDay[day]?.length > 0;
+            const isSelected = selectedDay === day;
+            const regsHere = regsByDay[day] || [];
+            const minDays = regsHere.length > 0 ? Math.min(...regsHere.map(r => daysUntil(r.deadline))) : null;
+            return (
+              <div key={day} onClick={() => setSelectedDay(isSelected ? null : day)}
+                className={`min-h-16 border-r border-b border-gray-800 p-1.5 cursor-pointer transition ${isSelected ? "bg-indigo-950/50" : hasRegs ? "hover:bg-gray-800/50" : "hover:bg-gray-800/20"}`}>
+                <div className={`text-xs font-semibold w-6 h-6 flex items-center justify-center rounded-full mb-1 ${isToday ? "bg-indigo-500 text-white" : "text-gray-400"}`}>{day}</div>
+                {regsHere.slice(0,2).map(r => (
+                  <div key={r.id} className="text-xs px-1 py-0.5 rounded truncate mb-0.5" style={{backgroundColor: urgencyColor(daysUntil(r.deadline))+"22", color: urgencyColor(daysUntil(r.deadline))}}>
+                    {r.name.substring(0,18)}…
+                  </div>
+                ))}
+                {regsHere.length > 2 && <div className="text-xs text-gray-500">+{regsHere.length-2} more</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {selectedDay && selectedRegs.length > 0 && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <h3 className="font-semibold text-white mb-3">{months[month]} {selectedDay}, {year} — {selectedRegs.length} deadline{selectedRegs.length!==1?"s":""}</h3>
+          <div className="space-y-2">
+            {selectedRegs.map(r => (
+              <div key={r.id} className="flex items-start justify-between gap-3 py-2 border-b border-gray-800 last:border-0">
+                <div>
+                  <div className="font-medium text-white text-sm">{r.name}</div>
+                  <div className="text-xs text-gray-500">{r.reference} · {r.region} · {r.domain}</div>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <Badge color={scopeBadge(scopeMap[r.id]||"Pending")} small>{scopeMap[r.id]||"Pending"}</Badge>
+                  <div className="text-xs" style={{color:urgencyColor(daysUntil(r.deadline))}}>
+                    {daysUntil(r.deadline) === 0 ? "Today" : daysUntil(r.deadline) < 0 ? `${Math.abs(daysUntil(r.deadline))}d past` : `${daysUntil(r.deadline)}d remaining`}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* Mobile Bottom Nav */}
-      {IS_MOBILE && <div className="mobile-nav" style={{ display: "flex", position: "fixed", bottom: 0, left: 0, right: 0, background: C.panel, borderTop: "1px solid " + C.border, zIndex: 150, padding: "8px 0", paddingBottom: "max(8px, env(safe-area-inset-bottom))" }}>
-        {[
-          { icon: "☰", label: "Menu", action: function() { setShowMobileSidebar(true); } },
-          { icon: "⟳", label: "Scan", action: scanAllSources, disabled: scanning },
-          { icon: "📋", label: "List", action: function() { setMobileView("home"); setSelected(null); } },
-          { icon: "⚙", label: "Sources", action: function() { setShowSources(true); } },
-        ].map(function(item, i) {
-          return (
-            <button key={i} onClick={item.disabled ? undefined : item.action}
-              style={{ flex: 1, background: "transparent", border: "none", color: item.disabled ? C.muted : C.muted, cursor: item.disabled ? "default" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 0", opacity: item.disabled ? 0.4 : 1 }}>
-              <span style={{ fontSize: 18 }}>{item.icon}</span>
-              <span style={{ fontSize: 9, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted }}>{item.label}</span>
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
+export default function App() {
+  const [authed, setAuthed] = useState(() => storage.get(SESSION_KEY, false));
+  const [view, setView] = useState("dashboard");
+  const [scopeMap, setScopeMap] = useState(() => storage.get(SCOPE_KEY, {}));
+  const [analysisMap, setAnalysisMap] = useState(() => storage.get(ANALYSIS_KEY, {}));
+  const [deletedIds, setDeletedIds] = useState(() => storage.get("delphi_deleted", []));
+  const [isAdmin, setIsAdmin] = useState(() => storage.get("delphi_admin", false));
+  const [showAdminToggle, setShowAdminToggle] = useState(false);
+
+  // Merge base regulations with any custom additions, minus deleted
+  const allRegs = useMemo(() => {
+    const deletedSet = new Set(deletedIds);
+    return REGULATIONS.filter(r => !deletedSet.has(r.id));
+  }, [deletedIds]);
+
+  const inScopeCount = useMemo(() => Object.values(scopeMap).filter(v => v === "In Scope").length, [scopeMap]);
+
+  const login = () => { setAuthed(true); storage.set(SESSION_KEY, true); };
+  const logout = () => { setAuthed(false); storage.set(SESSION_KEY, false); };
+
+  const setScopeFor = useCallback((id, val) => {
+    setScopeMap(prev => { const n = {...prev, [id]: val}; storage.set(SCOPE_KEY, n); return n; });
+  }, []);
+
+  const onAnalysisComplete = useCallback((id, data) => {
+    setAnalysisMap(prev => { const n = {...prev, [id]: data}; storage.set(ANALYSIS_KEY, n); return n; });
+  }, []);
+
+  const onDelete = useCallback((id) => {
+    setDeletedIds(prev => { const n = [...prev, id]; storage.set("delphi_deleted", n); return n; });
+  }, []);
+
+  if (!authed) return <Login onLogin={login}/>;
+
+  const viewProps = { allRegs, scopeMap, analysisMap };
+
+  return (
+    <div className="min-h-screen bg-gray-950 text-white">
+      <Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount}/>
+      <main className="ml-60 min-h-screen">
+        <div className="max-w-6xl mx-auto p-6">
+          {/* Admin mode toggle */}
+          <div className="flex justify-end mb-4">
+            <button onClick={() => { const v = !isAdmin; setIsAdmin(v); storage.set("delphi_admin",v); }}
+              className={`text-xs px-3 py-1.5 rounded-lg border transition ${isAdmin ? "border-red-700 bg-red-950/40 text-red-300" : "border-gray-700 bg-gray-800 text-gray-500 hover:text-gray-300"}`}>
+              {isAdmin ? "🔐 Admin Mode ON" : "Admin Mode"}
             </button>
-          );
-        })}
-      </div>}
-
-      {IS_MOBILE && <div style={{ height: 72 }} />}
+          </div>
+          {view === "dashboard" && <Dashboard {...viewProps}/>}
+          {view === "inventory" && <Inventory {...viewProps} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin}/>}
+          {view === "analyze" && <Analyze {...viewProps} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete}/>}
+          {view === "controls" && <Controls {...viewProps}/>}
+          {view === "timeline" && <Timeline {...viewProps}/>}
+          {view === "calendar" && <Calendar {...viewProps}/>}
+        </div>
+      </main>
     </div>
   );
 }
