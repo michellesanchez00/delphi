@@ -86,36 +86,20 @@ function Analyze({allRegs,scopeMap,onScopeChange,analysisMap,onAnalysisComplete,
   const inScopeIds=useMemo(()=>new Set(Object.entries(scopeMap).filter(([,v])=>v==="In Scope").map(([k])=>k)),[scopeMap]);
   const analyze=async()=>{
     if(!reg)return;setLoading(true);setError("");setResult(null);
-    const existingCtrl=CONTROLS_LIBRARY.filter(c=>c.regulations.some(rId=>inScopeIds.has(rId)&&rId!==selected)).map(c=>`${c.controlId}: ${c.title}`).join("\n");
-    const regCtrl=CONTROLS_LIBRARY.filter(c=>c.regulations.includes(selected));
-    const prompt=`You are a senior regulatory compliance expert for Marsh McLennan.
+    const existingCtrl=CONTROLS_LIBRARY.filter(c=>c.regulations.some(rId=>inScopeIds.has(rId)&&rId!==selected)).slice(0,20).map(c=>c.title).join(", ");
+    const regCtrl=CONTROLS_LIBRARY.filter(c=>c.regulations.includes(selected)).map(c=>c.title).join(", ");
+    const prompt=`You are a regulatory compliance expert. Respond with ONLY a valid JSON object - no markdown, no backticks, no text outside JSON. No newlines inside string values.
 
-IMPORTANT: Your ENTIRE response must be a single valid JSON object. No markdown, no backticks, no explanation outside JSON. All string values must be properly escaped. Do not use newlines inside string values.
-
-Analyze this regulation for Marsh. The Marsh group entities are: ${MARSH_ENTITIES.join(", ")}.
-
-Assess which of these entities are In Scope or Out of Scope for this regulation and why. Consider the entity's business type, jurisdiction, and regulatory perimeter.
-
-Analyze this regulation for Marsh:
-Name: ${reg.name}
-Reference: ${reg.reference}
-Region: ${reg.region}
-Domain: ${reg.domain}
-Effective: ${reg.effectiveDate}
-Deadline: ${reg.deadline||"N/A"}
+Regulation: ${reg.name} (${reg.reference}) | ${reg.region} | ${reg.domain} | Effective: ${reg.effectiveDate} | Deadline: ${reg.deadline||"N/A"}
 Summary: ${reg.summary}
-Marsh entities: ${(reg.marshEntities||[]).join(", ")}
+Marsh entities tagged in scope for this reg: ${(reg.marshEntities||[]).join(", ")||"None"}
+Existing controls already covered: ${existingCtrl||"None"}
+Controls already mapped to this reg: ${regCtrl||"None"}
 
-Existing controls already in place (from other In Scope regulations):
-${existingCtrl||"None yet"}
+Return this exact JSON (all string values max 20 words, reasons max 10 words):
+{"executiveSummary":"2 sentence summary","businessRisk":"High","riskRationale":"one sentence","keyObligations":["obligation 1","obligation 2","obligation 3"],"marshScope":[{"entity":"Marsh (Parent)","inScope":true,"reason":"short reason"},{"entity":"Marsh Risk","inScope":true,"reason":"short reason"},{"entity":"Guy Carpenter / Marsh Re","inScope":false,"reason":"short reason"},{"entity":"Mercer","inScope":false,"reason":"short reason"},{"entity":"Oliver Wyman","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Limited (UK)","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Ireland","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Asset Management LLC","inScope":false,"reason":"short reason"},{"entity":"Victor Insurance","inScope":false,"reason":"short reason"},{"entity":"McGriff Insurance Services","inScope":false,"reason":"short reason"}],"newControls":[{"title":"name","description":"what to do","priority":"Immediate"}],"gapAnalysis":"one paragraph","deadlineRisk":"one sentence or empty string","recommendedActions":["action 1","action 2","action 3"]}
 
-Controls mapped to this regulation in the library:
-${regCtrl.map(c=>`${c.controlId}: ${c.title}`).join(", ")||"None mapped"}
-
-Return ONLY this JSON structure with no other text:
-{"executiveSummary":"2-3 sentence impact summary","businessRisk":"High","riskRationale":"one sentence","keyObligations":["obligation 1","obligation 2","obligation 3"],"marshScope":[{"entity":"Marsh (Parent)","inScope":true,"reason":"under 15 words"},{"entity":"Marsh Risk","inScope":true,"reason":"under 15 words"},{"entity":"Guy Carpenter / Marsh Re","inScope":false,"reason":"under 15 words"},{"entity":"Mercer","inScope":false,"reason":"under 15 words"},{"entity":"Oliver Wyman","inScope":false,"reason":"under 15 words"},{"entity":"Marsh Securities LLC","inScope":false,"reason":"under 15 words"},{"entity":"Marsh Securities Limited (UK)","inScope":false,"reason":"under 15 words"},{"entity":"Marsh Securities Ireland","inScope":false,"reason":"under 15 words"},{"entity":"Marsh MMA Securities LLC","inScope":false,"reason":"under 15 words"},{"entity":"Marsh MMA Asset Management LLC","inScope":false,"reason":"under 15 words"},{"entity":"Victor Insurance","inScope":false,"reason":"under 15 words"},{"entity":"McGriff Insurance Services","inScope":false,"reason":"under 15 words"}],"newControls":[{"title":"control name","description":"what to do","priority":"Immediate"}],"gapAnalysis":"gap assessment paragraph","deadlineRisk":"deadline commentary or empty string","recommendedActions":["action 1","action 2","action 3"]}
-
-Rules: businessRisk must be High, Medium, or Low. priority must be Immediate, Short-term, or Ongoing. newControls should only include controls NOT already covered by existing controls listed above. marshScope MUST include ALL 12 entities listed. Keep each reason under 15 words. Keep all other fields under 30 words. Output ONLY raw JSON, no markdown, no code fences.`;
+Rules: businessRisk = High/Medium/Low. priority = Immediate/Short-term/Ongoing. marshScope must have all 12 entities with correct inScope values based on the tagged entities above. newControls = only gaps not already covered. Output ONLY raw JSON.`;
     try{
       const res=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-5",max_tokens:4000,messages:[{role:"user",content:prompt}]})});
       if(!res.ok)throw new Error(`API error ${res.status}`);
