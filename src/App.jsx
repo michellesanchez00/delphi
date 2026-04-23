@@ -5,923 +5,145 @@ const PROXY_URL = "https://delphi-proxy.vercel.app/api/claude";
 const SESSION_KEY = "delphi_auth";
 const SCOPE_KEY = "delphi_scope";
 const ANALYSIS_KEY = "delphi_analyses";
-const CUSTOM_REGS_KEY = "delphi_custom_regs";
 
-// ── helpers ────────────────────────────────────────────────────────────────────
-const formatDeadline = (iso) => {
-  if (!iso) return null;
-  const d = new Date(iso + "T00:00:00");
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-};
-const daysUntil = (iso) => {
-  if (!iso) return null;
-  const now = new Date(); now.setHours(0,0,0,0);
-  const d = new Date(iso + "T00:00:00");
-  return Math.round((d - now) / 86400000);
-};
-const urgencyColor = (days) => {
-  if (days === null) return "var(--text-muted)";
-  if (days < 0) return "#ef4444";
-  if (days <= 90) return "#f59e0b";
-  if (days <= 180) return "#3b82f6";
-  return "#10b981";
-};
-const regionFlag = { EU:"🇪🇺", US:"🇺🇸", UK:"🇬🇧", APAC:"🌏", Global:"🌐", Canada:"🇨🇦", LATAM:"🌎", "Middle East":"🕌", Africa:"🌍" };
-const statusBadge = (s) => {
-  const map = { "In Force":"green","Proposed":"amber","Repealed":"red","Amended":"blue","Pending":"gray","Analyzed":"indigo" };
-  return map[s] || "gray";
-};
-const scopeBadge = (s) => ({ "In Scope":"green","Out of Scope":"red","Pending":"amber" }[s] || "gray");
-
-// ── STORAGE ────────────────────────────────────────────────────────────────────
-const storage = {
-  get: (k, def = null) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } },
-  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+const C = {
+  bg:"#0a0c10",panel:"#111318",panel2:"#181c24",border:"#1e2433",
+  text:"#e2e8f0",muted:"#64748b",accent:"#6366f1",accentHover:"#818cf8",
+  green:"#10b981",greenBg:"rgba(16,185,129,0.12)",greenBorder:"rgba(16,185,129,0.3)",
+  red:"#ef4444",redBg:"rgba(239,68,68,0.12)",redBorder:"rgba(239,68,68,0.3)",
+  amber:"#f59e0b",amberBg:"rgba(245,158,11,0.12)",amberBorder:"rgba(245,158,11,0.3)",
+  blue:"#3b82f6",blueBg:"rgba(59,130,246,0.12)",blueBorder:"rgba(59,130,246,0.3)",
+  indigo:"#6366f1",indigoBg:"rgba(99,102,241,0.12)",indigoBorder:"rgba(99,102,241,0.3)",
 };
 
-// ── BADGE ─────────────────────────────────────────────────────────────────────
-function Badge({ color, children, small }) {
-  const colors = {
-    green: "bg-emerald-100 text-emerald-800 border-emerald-200",
-    amber: "bg-amber-100 text-amber-800 border-amber-200",
-    red: "bg-red-100 text-red-800 border-red-200",
-    blue: "bg-blue-100 text-blue-800 border-blue-200",
-    indigo: "bg-indigo-100 text-indigo-800 border-indigo-200",
-    gray: "bg-gray-100 text-gray-700 border-gray-200",
+const storage={
+  get:(k,d=null)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch{return d;}},
+  set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}},
+};
+
+const formatDeadline=(iso)=>{if(!iso)return null;return new Date(iso+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});};
+const daysUntil=(iso)=>{if(!iso)return null;const n=new Date();n.setHours(0,0,0,0);return Math.round((new Date(iso+"T00:00:00")-n)/86400000);};
+const urgencyColor=(d)=>{if(d===null)return C.muted;if(d<0)return C.red;if(d<=90)return C.amber;if(d<=180)return C.blue;return C.green;};
+const regionFlag={EU:"EU",US:"US",UK:"UK",APAC:"APAC",Global:"Global",Canada:"CA",LATAM:"LATAM","Middle East":"ME",Africa:"AF"};
+
+const scopeStyle=(s)=>({"In Scope":{bg:C.greenBg,border:C.greenBorder,color:C.green},"Out of Scope":{bg:C.redBg,border:C.redBorder,color:C.red},Pending:{bg:C.amberBg,border:C.amberBorder,color:C.amber}}[s]||{bg:"rgba(100,116,139,0.1)",border:"rgba(100,116,139,0.3)",color:C.muted});
+const statusStyle=(s)=>({"In Force":{bg:C.greenBg,border:C.greenBorder,color:C.green},Proposed:{bg:C.amberBg,border:C.amberBorder,color:C.amber},Analyzed:{bg:C.indigoBg,border:C.indigoBorder,color:C.indigo},Repealed:{bg:C.redBg,border:C.redBorder,color:C.red}}[s]||{bg:"rgba(100,116,139,0.1)",border:"rgba(100,116,139,0.3)",color:C.muted});
+
+function Badge({text,style:s={}}){
+  return(<span style={{display:"inline-flex",alignItems:"center",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20,border:"1px solid",backgroundColor:s.bg||"rgba(100,116,139,0.1)",borderColor:s.border||"rgba(100,116,139,0.3)",color:s.color||C.muted,whiteSpace:"nowrap"}}>{text}</span>);
+}
+
+const NAV=[{id:"dashboard",label:"Dashboard",icon:"⊞"},{id:"inventory",label:"Regulation Inventory",icon:"≡"},{id:"analyze",label:"Analyze",icon:"⚡"},{id:"controls",label:"Controls Library",icon:"✓"},{id:"timeline",label:"Timeline",icon:"→"},{id:"calendar",label:"Calendar",icon:"▦"}];
+
+const G=`*{box-sizing:border-box;margin:0;padding:0;}body{background:#0a0c10;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;}input,select,button{font-family:inherit;}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-thumb{background:#1e2433;border-radius:4px;}@keyframes spin{to{transform:rotate(360deg)}}.spin{animation:spin 0.8s linear infinite;}table{border-collapse:collapse;width:100%;}`;
+
+function Login({onLogin}){
+  const [pw,setPw]=useState("");const [err,setErr]=useState("");
+  const go=()=>pw==="Regscan"?onLogin():setErr("Incorrect password.");
+  return(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}><style>{G}</style><div style={{width:"100%",maxWidth:360}}><div style={{textAlign:"center",marginBottom:32}}><div style={{fontSize:28,fontWeight:800,color:C.text,letterSpacing:-1}}>DELPHI</div><div style={{fontSize:13,color:C.muted,marginTop:4}}>Marsh Regulatory Intelligence Platform</div></div><div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:16,padding:32}}><div style={{marginBottom:16}}><label style={{display:"block",fontSize:11,color:C.muted,marginBottom:6,fontWeight:600,letterSpacing:"0.08em",textTransform:"uppercase"}}>Password</label><input type="password" value={pw} onChange={e=>{setPw(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&go()} style={{width:"100%",background:C.panel2,border:`1px solid ${err?C.red:C.border}`,color:C.text,borderRadius:8,padding:"10px 12px",fontSize:14,outline:"none"}} placeholder="Enter access code" autoFocus/>{err&&<div style={{color:C.red,fontSize:12,marginTop:6}}>{err}</div>}</div><button onClick={go} style={{width:"100%",background:C.accent,border:"none",color:"#fff",fontWeight:700,padding:"11px",borderRadius:8,fontSize:14,cursor:"pointer"}}>Access DELPHI</button></div></div></div>);
+}
+
+function Sidebar({active,onNav,onLogout,totalRegs,inScope}){
+  return(<div style={{position:"fixed",inset:"0 auto 0 0",width:220,background:C.panel,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",zIndex:40,overflowY:"auto"}}><div style={{padding:"20px 16px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}><div style={{fontSize:18,fontWeight:800,color:C.text,letterSpacing:-0.5}}>DELPHI</div><div style={{fontSize:11,color:C.muted,marginTop:2}}>Marsh Regulatory Intelligence</div></div><nav style={{flex:1,padding:"12px 8px"}}>{NAV.map(n=>(<button key={n.id} onClick={()=>onNav(n.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:500,textAlign:"left",marginBottom:2,background:active===n.id?C.accent:"transparent",color:active===n.id?"#fff":C.muted,transition:"all 0.15s"}}><span style={{fontSize:15,width:18,textAlign:"center",flexShrink:0}}>{n.icon}</span><span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{n.label}</span></button>))}</nav><div style={{padding:"12px 16px",borderTop:`1px solid ${C.border}`,flexShrink:0}}><div style={{fontSize:11,color:C.muted,marginBottom:8}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}><span>Regulations:</span><span style={{color:C.text,fontWeight:600}}>{totalRegs}</span></div><div style={{display:"flex",justifyContent:"space-between"}}><span>In Scope:</span><span style={{color:C.green,fontWeight:600}}>{inScope}</span></div></div><button onClick={onLogout} style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:6,border:`1px solid ${C.border}`,background:"transparent",color:C.muted,fontSize:12,cursor:"pointer"}}>Sign out</button></div></div>);
+}
+
+function StatCard({label,value,sub,color}){
+  const col={indigo:C.indigo,emerald:C.green,amber:C.amber,red:C.red,blue:C.blue}[color]||C.indigo;
+  return(<div style={{background:C.panel,border:`1px solid ${C.border}`,borderLeft:`3px solid ${col}`,borderRadius:12,padding:"14px 16px"}}><div style={{fontSize:26,fontWeight:800,color:col}}>{value}</div><div style={{fontSize:13,color:C.text,fontWeight:600,marginTop:2}}>{label}</div>{sub&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>{sub}</div>}</div>);
+}
+
+function Dashboard({allRegs,scopeMap,analysisMap}){
+  const byScope=useMemo(()=>{const c={"In Scope":0,"Out of Scope":0,Pending:0};allRegs.forEach(r=>{const s=scopeMap[r.id]||"Pending";if(s in c)c[s]++;});return c;},[allRegs,scopeMap]);
+  const analyzed=Object.keys(analysisMap).length;
+  const upcoming=useMemo(()=>allRegs.filter(r=>{if(!r.deadline)return false;const d=daysUntil(r.deadline);return d!==null&&d>=0&&d<=180;}).sort((a,b)=>new Date(a.deadline)-new Date(b.deadline)).slice(0,8),[allRegs]);
+  const byDomain=useMemo(()=>{const m={};allRegs.forEach(r=>{if(!m[r.domain])m[r.domain]={total:0,inScope:0};m[r.domain].total++;if((scopeMap[r.id]||"Pending")==="In Scope")m[r.domain].inScope++;});return Object.entries(m).sort((a,b)=>b[1].total-a[1].total);},[allRegs,scopeMap]);
+  const byRegion=useMemo(()=>{const m={};allRegs.forEach(r=>{m[r.region]=(m[r.region]||0)+1;});return Object.entries(m).sort((a,b)=>b[1]-a[1]);},[allRegs]);
+  return(<div><div style={{marginBottom:20}}><h1 style={{fontSize:20,fontWeight:800,color:C.text}}>Compliance Posture Dashboard</h1><p style={{fontSize:13,color:C.muted,marginTop:4}}>Global regulatory inventory overview for Marsh entities</p></div><div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:20}}><StatCard label="Total Regulations" value={allRegs.length} color="indigo"/><StatCard label="In Scope" value={byScope["In Scope"]} sub="Applicable" color="emerald"/><StatCard label="Out of Scope" value={byScope["Out of Scope"]} sub="Excluded" color="red"/><StatCard label="Pending Review" value={byScope.Pending} sub="Awaiting" color="amber"/><StatCard label="Analyzed" value={analyzed} sub="AI complete" color="blue"/></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}><div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:16}}><div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>Regulations by Domain</div>{byDomain.map(([dom,{total,inScope}])=>(<div key={dom} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}><div style={{fontSize:12,color:C.muted,width:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flexShrink:0}}>{dom}</div><div style={{flex:1,background:C.panel2,borderRadius:4,height:6,overflow:"hidden"}}><div style={{height:"100%",background:C.accent,borderRadius:4,width:`${(total/allRegs.length)*100}%`}}/></div><div style={{fontSize:12,color:C.text,width:24,textAlign:"right"}}>{total}</div><div style={{fontSize:11,color:C.green,width:70,textAlign:"right"}}>{inScope} in scope</div></div>))}</div><div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:16}}><div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>Upcoming Deadlines (180 days)</div>{upcoming.length===0&&<div style={{fontSize:12,color:C.muted,textAlign:"center",padding:"20px 0"}}>No deadlines in next 180 days</div>}{upcoming.map(r=>{const days=daysUntil(r.deadline);return(<div key={r.id} style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12,paddingBottom:8,marginBottom:8,borderBottom:`1px solid ${C.border}`}}><div style={{flex:1,minWidth:0}}><div style={{fontSize:12,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</div><div style={{fontSize:11,color:C.muted}}>{r.region} · {r.domain}</div></div><div style={{textAlign:"right",flexShrink:0}}><div style={{fontSize:12,fontWeight:700,color:urgencyColor(days)}}>{formatDeadline(r.deadline)}</div><div style={{fontSize:11,color:C.muted}}>{days===0?"Today":`${days}d`}</div></div></div>);})}</div></div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}><div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:16}}><div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>Regulations by Region</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>{byRegion.map(([reg,cnt])=>(<div key={reg} style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}><span style={{color:C.muted,flex:1}}>{reg}</span><span style={{color:C.text,fontWeight:600}}>{cnt}</span></div>))}</div></div><div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:16}}><div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>Scope Status</div>{Object.entries(byScope).map(([s,cnt])=>{const pct=allRegs.length?((cnt/allRegs.length)*100).toFixed(0):0;const col={"In Scope":C.green,"Out of Scope":C.red,Pending:C.amber}[s];return(<div key={s} style={{marginBottom:12}}><div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span style={{color:C.muted}}>{s}</span><span style={{color:C.text}}>{cnt} ({pct}%)</span></div><div style={{height:8,background:C.panel2,borderRadius:4,overflow:"hidden"}}><div style={{height:"100%",background:col,borderRadius:4,width:`${pct}%`,transition:"width 0.4s ease"}}/></div></div>);})}</div></div></div>);
+}
+
+function Inventory({allRegs,scopeMap,onScopeChange,analysisMap,onDelete,isAdmin}){
+  const [search,setSearch]=useState("");const [domain,setDomain]=useState("All");const [region,setRegion]=useState("All");const [scope,setScope]=useState("All");const [page,setPage]=useState(1);const [delConfirm,setDelConfirm]=useState(null);const PER=20;
+  const filtered=useMemo(()=>{let list=[...allRegs];if(search){const q=search.toLowerCase();list=list.filter(r=>r.name.toLowerCase().includes(q)||r.reference.toLowerCase().includes(q)||r.id.toLowerCase().includes(q)||(r.tags||[]).some(t=>t.toLowerCase().includes(q)));}if(domain!=="All")list=list.filter(r=>r.domain===domain);if(region!=="All")list=list.filter(r=>r.region===region);if(scope!=="All")list=list.filter(r=>(scopeMap[r.id]||"Pending")===scope);return list;},[allRegs,search,domain,region,scope,scopeMap]);
+  const pages=Math.ceil(filtered.length/PER);const paged=filtered.slice((page-1)*PER,page*PER);
+  const inp={background:C.panel2,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"8px 12px",fontSize:13,outline:"none"};
+  const th={padding:"10px 12px",fontSize:11,fontWeight:700,color:C.muted,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap",textTransform:"uppercase",letterSpacing:"0.05em"};
+  const td={padding:"10px 12px",borderBottom:`1px solid ${C.border}`,verticalAlign:"top"};
+  const confirmDel=(id)=>{if(delConfirm===id){onDelete(id);setDelConfirm(null);}else{setDelConfirm(id);setTimeout(()=>setDelConfirm(null),3000);}};
+  return(<div><div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8}}><div><h1 style={{fontSize:20,fontWeight:800,color:C.text}}>Regulation Inventory</h1><p style={{fontSize:13,color:C.muted,marginTop:4}}>{filtered.length} regulations {filtered.length!==allRegs.length&&`(${allRegs.length} total)`}</p></div>{isAdmin&&<Badge text="Admin Mode" style={{bg:C.indigoBg,border:C.indigoBorder,color:C.indigo}}/>}</div><div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}><input value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}} placeholder="Search regulations, references, tags..." style={{...inp,flex:1,minWidth:200}}/><select value={domain} onChange={e=>{setDomain(e.target.value);setPage(1);}} style={{...inp,cursor:"pointer"}}><option>All</option>{DOMAINS.map(d=><option key={d}>{d}</option>)}</select><select value={region} onChange={e=>{setRegion(e.target.value);setPage(1);}} style={{...inp,cursor:"pointer"}}><option>All</option>{["EU","US","UK","APAC","Global","Canada","LATAM","Middle East","Africa"].map(r=><option key={r}>{r}</option>)}</select><select value={scope} onChange={e=>{setScope(e.target.value);setPage(1);}} style={{...inp,cursor:"pointer"}}><option>All</option><option>In Scope</option><option>Out of Scope</option><option>Pending</option></select></div><div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}><div style={{overflowX:"auto"}}><table><thead style={{background:C.panel2}}><tr><th style={{...th,width:80}}>ID</th><th style={th}>Regulation</th><th style={{...th,width:80}}>Region</th><th style={{...th,width:130}}>Domain</th><th style={{...th,width:90}}>Status</th><th style={{...th,width:100}}>Scope</th><th style={{...th,width:130}}>Deadline</th><th style={{...th,width:200}}>Set Scope</th></tr></thead><tbody>{paged.map(r=>{const rs=analysisMap[r.id]?"Analyzed":r.status;const cs=scopeMap[r.id]||"Pending";const days=daysUntil(r.deadline);return(<tr key={r.id}><td style={{...td,fontFamily:"monospace",fontSize:11,color:C.muted}}>{r.id}</td><td style={td}><div style={{fontWeight:600,color:C.text,fontSize:13,maxWidth:280}}>{r.name}</div><div style={{fontSize:11,color:C.muted,marginTop:2}}>{r.reference}</div></td><td style={{...td,fontSize:12}}>{r.region}</td><td style={td}><Badge text={r.domain}/></td><td style={td}><Badge text={rs} style={statusStyle(rs)}/></td><td style={td}><Badge text={cs} style={scopeStyle(cs)}/></td><td style={{...td,fontSize:12,whiteSpace:"nowrap"}}>{r.deadline?<span style={{color:urgencyColor(days)}}>{formatDeadline(r.deadline)}{days!==null&&days>=0&&<span style={{color:C.muted,marginLeft:4}}>({days}d)</span>}</span>:<span style={{color:C.border}}>-</span>}</td><td style={td}><div style={{display:"flex",gap:6,alignItems:"center"}}><select value={cs} onChange={e=>onScopeChange(r.id,e.target.value)} style={{background:C.panel2,border:`1px solid ${C.border}`,color:C.text,borderRadius:6,padding:"4px 8px",fontSize:12,cursor:"pointer",outline:"none"}}><option>Pending</option><option>In Scope</option><option>Out of Scope</option></select>{isAdmin&&<button onClick={()=>confirmDel(r.id)} style={{fontSize:11,padding:"4px 8px",borderRadius:6,border:`1px solid ${delConfirm===r.id?C.red:C.border}`,background:delConfirm===r.id?C.redBg:"transparent",color:delConfirm===r.id?C.red:C.muted,cursor:"pointer"}}>{delConfirm===r.id?"Confirm":"X"}</button>}</div></td></tr>);})}{paged.length===0&&<tr><td colSpan={8} style={{...td,textAlign:"center",color:C.muted,padding:"48px 0"}}>No regulations match your filters</td></tr>}</tbody></table></div>{pages>1&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",borderTop:`1px solid ${C.border}`}}><span style={{fontSize:12,color:C.muted}}>Page {page} of {pages} - {filtered.length} results</span><div style={{display:"flex",gap:4}}><button onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1} style={{padding:"4px 10px",borderRadius:6,border:`1px solid ${C.border}`,background:C.panel2,color:C.text,fontSize:12,cursor:"pointer",opacity:page===1?0.4:1}}>Prev</button><button onClick={()=>setPage(p=>Math.min(pages,p+1))} disabled={page===pages} style={{padding:"4px 10px",borderRadius:6,border:`1px solid ${C.border}`,background:C.panel2,color:C.text,fontSize:12,cursor:"pointer",opacity:page===pages?0.4:1}}>Next</button></div></div>}</div></div>);
+}
+
+function Analyze({allRegs,scopeMap,onScopeChange,analysisMap,onAnalysisComplete}){
+  const [selected,setSelected]=useState("");const [loading,setLoading]=useState(false);const [error,setError]=useState("");const [result,setResult]=useState(null);
+  const reg=allRegs.find(r=>r.id===selected);
+  useEffect(()=>{setResult(selected&&analysisMap[selected]?analysisMap[selected]:null);},[selected,analysisMap]);
+  const inScopeIds=useMemo(()=>new Set(Object.entries(scopeMap).filter(([,v])=>v==="In Scope").map(([k])=>k)),[scopeMap]);
+  const analyze=async()=>{
+    if(!reg)return;setLoading(true);setError("");setResult(null);
+    const existingCtrl=CONTROLS_LIBRARY.filter(c=>c.regulations.some(rId=>inScopeIds.has(rId)&&rId!==selected)).map(c=>`${c.controlId}: ${c.title}`).join("\n");
+    const regCtrl=CONTROLS_LIBRARY.filter(c=>c.regulations.includes(selected));
+    const prompt=`You are a senior regulatory compliance expert for Marsh McLennan. Analyze this regulation:\nName: ${reg.name}\nReference: ${reg.reference}\nRegion: ${reg.region}\nDomain: ${reg.domain}\nEffective: ${reg.effectiveDate}\nDeadline: ${reg.deadline||"N/A"}\nSummary: ${reg.summary}\nMarsh entities: ${reg.marshEntities?.join(", ")}\n\nExisting controls already in place:\n${existingCtrl||"None yet"}\n\nControls mapped to this regulation:\n${regCtrl.map(c=>`${c.controlId}: ${c.title}`).join("\n")||"None mapped"}\n\nRespond ONLY with valid JSON (no markdown):\n{"executiveSummary":"...","businessRisk":"High|Medium|Low","riskRationale":"...","keyObligations":["..."],"newControls":[{"title":"...","description":"...","priority":"Immediate|Short-term|Ongoing"}],"gapAnalysis":"...","deadlineRisk":"...","recommendedActions":["..."]}\nnewControls = controls NOT already covered by existing in-scope regulations.`;
+    try{
+      const res=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-5",max_tokens:2000,messages:[{role:"user",content:prompt}]})});
+      if(!res.ok)throw new Error(`API error ${res.status}`);
+      const data=await res.json();const text=data.content?.[0]?.text||"";
+      let parsed;try{parsed=JSON.parse(text);}catch{const m=text.match(/\{[\s\S]*\}/);if(m)parsed=JSON.parse(m[0]);else throw new Error("Could not parse response");}
+      onAnalysisComplete(selected,parsed);setResult(parsed);
+    }catch(e){setError(e.message||"Analysis failed");}
+    finally{setLoading(false);}
   };
-  return (
-    <span className={`inline-flex items-center border font-medium rounded-full ${small ? "text-xs px-2 py-0.5" : "text-xs px-2.5 py-1"} ${colors[color] || colors.gray}`}>
-      {children}
-    </span>
-  );
+  const riskColor=r=>({High:C.red,Medium:C.amber,Low:C.green}[r]||C.muted);
+  const inp={background:C.panel2,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"10px 12px",fontSize:14,width:"100%",outline:"none"};
+  const card={background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:16,marginBottom:12};
+  return(<div><div style={{marginBottom:20}}><h1 style={{fontSize:20,fontWeight:800,color:C.text}}>Analyze Regulation</h1><p style={{fontSize:13,color:C.muted,marginTop:4}}>AI-powered compliance analysis with gap assessment</p></div><div style={card}><div style={{marginBottom:12}}><label style={{display:"block",fontSize:11,color:C.muted,marginBottom:6,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em"}}>Select Regulation</label><select value={selected} onChange={e=>setSelected(e.target.value)} style={{...inp,cursor:"pointer"}}><option value="">-- Select a regulation to analyze --</option>{allRegs.map(r=><option key={r.id} value={r.id}>{r.id}: {r.name}</option>)}</select></div>{reg&&<div style={{background:C.panel2,borderRadius:8,padding:12,marginBottom:12}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:8}}><div><div style={{fontWeight:700,color:C.text,fontSize:14}}>{reg.name}</div><div style={{fontSize:11,color:C.muted,marginTop:2}}>{reg.reference} - {reg.region} - {reg.domain}</div></div><div style={{display:"flex",gap:6,flexShrink:0}}><Badge text={analysisMap[selected]?"Analyzed":reg.status} style={statusStyle(analysisMap[selected]?"Analyzed":reg.status)}/><Badge text={scopeMap[selected]||"Pending"} style={scopeStyle(scopeMap[selected]||"Pending")}/></div></div><p style={{fontSize:12,color:C.muted,lineHeight:1.6,marginBottom:8}}>{reg.summary}</p>{reg.deadline&&<div style={{fontSize:12,color:urgencyColor(daysUntil(reg.deadline)),marginBottom:8}}>Deadline: {formatDeadline(reg.deadline)} ({daysUntil(reg.deadline)} days)</div>}<div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:12,color:C.muted}}>Scope:</span><select value={scopeMap[selected]||"Pending"} onChange={e=>onScopeChange(selected,e.target.value)} style={{background:C.panel,border:`1px solid ${C.border}`,color:C.text,borderRadius:6,padding:"4px 8px",fontSize:12,cursor:"pointer",outline:"none"}}><option>Pending</option><option>In Scope</option><option>Out of Scope</option></select></div></div>}<button onClick={analyze} disabled={!selected||loading} style={{display:"flex",alignItems:"center",gap:8,background:C.accent,border:"none",color:"#fff",fontWeight:700,padding:"10px 20px",borderRadius:8,fontSize:14,cursor:selected&&!loading?"pointer":"not-allowed",opacity:!selected||loading?0.6:1}}>{loading?<span>Analyzing...</span>:"Run Analysis"}</button>{error&&<div style={{marginTop:12,background:C.redBg,border:`1px solid ${C.redBorder}`,color:C.red,borderRadius:8,padding:12,fontSize:13}}>{error}</div>}</div>{result&&<div><div style={{...card,borderLeft:`3px solid ${riskColor(result.businessRisk)}`}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><div style={{fontWeight:700,color:C.text}}>Executive Summary</div><div style={{fontSize:14,fontWeight:800,color:riskColor(result.businessRisk)}}>{result.businessRisk} Risk</div></div><p style={{fontSize:13,color:C.muted,lineHeight:1.7}}>{result.executiveSummary}</p>{result.riskRationale&&<p style={{fontSize:12,color:C.muted,marginTop:8,fontStyle:"italic"}}>{result.riskRationale}</p>}</div><div style={card}><div style={{fontWeight:700,color:C.text,marginBottom:10}}>Key Obligations</div>{result.keyObligations?.map((o,i)=><div key={i} style={{display:"flex",gap:8,marginBottom:6,fontSize:13,color:C.muted}}><span style={{color:C.accent,flexShrink:0}}>-</span>{o}</div>)}</div><div style={card}><div style={{fontWeight:700,color:C.text,marginBottom:8}}>Gap Analysis</div><p style={{fontSize:13,color:C.muted,lineHeight:1.7}}>{result.gapAnalysis}</p></div>{result.newControls?.length>0&&<div style={{...card,background:C.indigoBg,border:`1px solid ${C.indigoBorder}`}}><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}><div style={{fontWeight:700,color:C.indigo}}>New Controls Required ({result.newControls.length})</div><span style={{fontSize:11,color:C.muted}}>- not covered by existing in-scope regulations</span></div>{result.newControls.map((c,i)=>{const pc={Immediate:C.red,"Short-term":C.amber,Ongoing:C.blue}[c.priority]||C.blue;return(<div key={i} style={{background:"rgba(0,0,0,0.2)",border:`1px solid ${C.indigoBorder}`,borderRadius:8,padding:12,marginBottom:8}}><div style={{display:"flex",justifyContent:"space-between",gap:8,marginBottom:4}}><span style={{fontWeight:600,color:C.accentHover,fontSize:13}}>{c.title}</span><Badge text={c.priority} style={{bg:`${pc}22`,border:`${pc}44`,color:pc}}/></div><p style={{fontSize:12,color:C.muted,lineHeight:1.6}}>{c.description}</p></div>);})}</div>}{result.recommendedActions?.length>0&&<div style={card}><div style={{fontWeight:700,color:C.text,marginBottom:10}}>Recommended Actions</div>{result.recommendedActions.map((a,i)=><div key={i} style={{display:"flex",gap:10,marginBottom:6,fontSize:13,color:C.muted,alignItems:"flex-start"}}><span style={{fontFamily:"monospace",fontSize:11,background:C.panel2,borderRadius:4,padding:"2px 6px",flexShrink:0}}>{i+1}</span>{a}</div>)}</div>}{result.deadlineRisk&&<div style={{...card,background:C.amberBg,border:`1px solid ${C.amberBorder}`}}><div style={{display:"flex",gap:8,fontSize:13,color:C.amber}}><span>!</span><span>{result.deadlineRisk}</span></div></div>}</div>}</div>);
 }
 
-// ── LOGIN ─────────────────────────────────────────────────────────────────────
-function Login({ onLogin }) {
-  const [pw, setPw] = useState("");
-  const [err, setErr] = useState("");
-  const handle = (e) => {
-    e.preventDefault();
-    if (pw === "Regscan") { onLogin(); }
-    else { setErr("Incorrect password."); }
-  };
-  return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <div className="text-3xl font-bold text-white tracking-tight mb-1">DELPHI</div>
-          <div className="text-sm text-gray-400">Marsh Regulatory Intelligence Platform</div>
-        </div>
-        <form onSubmit={handle} className="bg-gray-900 border border-gray-800 rounded-2xl p-8 space-y-4">
-          <div>
-            <label className="block text-xs text-gray-400 mb-1.5 font-medium uppercase tracking-wider">Password</label>
-            <input
-              type="password" value={pw} onChange={e => { setPw(e.target.value); setErr(""); }}
-              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
-              placeholder="Enter access code" autoFocus
-            />
-            {err && <p className="text-red-400 text-xs mt-1.5">{err}</p>}
-          </div>
-          <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-lg text-sm transition">
-            Access DELPHI
-          </button>
-        </form>
-      </div>
-    </div>
-  );
+function Controls({allRegs,scopeMap}){
+  const [cat,setCat]=useState("All");const [search,setSearch]=useState("");const [showAll,setShowAll]=useState(false);
+  const inScopeIds=useMemo(()=>new Set(Object.entries(scopeMap).filter(([,v])=>v==="In Scope").map(([k])=>k)),[scopeMap]);
+  const categories=useMemo(()=>["All",...new Set(CONTROLS_LIBRARY.map(c=>c.category))],[]);
+  const controls=useMemo(()=>{let l=CONTROLS_LIBRARY;if(!showAll)l=l.filter(c=>c.regulations.some(rId=>inScopeIds.has(rId)));if(cat!=="All")l=l.filter(c=>c.category===cat);if(search){const q=search.toLowerCase();l=l.filter(c=>c.title.toLowerCase().includes(q)||c.description.toLowerCase().includes(q));}return l;},[inScopeIds,cat,search,showAll]);
+  const card={background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:16,marginBottom:10};
+  const inp={background:C.panel2,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"8px 12px",fontSize:13,outline:"none"};
+  return(<div><div style={{marginBottom:16}}><h1 style={{fontSize:20,fontWeight:800,color:C.text}}>Controls Library</h1><p style={{fontSize:13,color:C.muted,marginTop:4}}>{controls.length} controls {showAll?"(all)":"(in-scope regulations)"}</p></div><div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search controls..." style={{...inp,flex:1,minWidth:180}}/><select value={cat} onChange={e=>setCat(e.target.value)} style={{...inp,cursor:"pointer"}}>{categories.map(c=><option key={c}>{c}</option>)}</select><label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}><input type="checkbox" checked={showAll} onChange={e=>setShowAll(e.target.checked)} style={{accentColor:C.accent}}/>Show all</label></div>{inScopeIds.size===0&&!showAll&&<div style={{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:12,padding:20,textAlign:"center",marginBottom:16}}><div style={{color:C.amber,fontSize:13,fontWeight:600}}>No regulations are marked In Scope yet</div><div style={{color:C.muted,fontSize:12,marginTop:4}}>Set regulations to In Scope in the Inventory tab</div></div>}{controls.map(ctrl=>{const pc={Immediate:C.red,"Short-term":C.amber,Ongoing:C.blue}[ctrl.priority]||C.blue;return(<div key={ctrl.controlId} style={card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:8}}><div><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}><span style={{fontFamily:"monospace",fontSize:11,color:C.muted}}>{ctrl.controlId}</span><Badge text={ctrl.priority} style={{bg:`${pc}22`,border:`${pc}44`,color:pc}}/></div><div style={{fontWeight:700,color:C.text,fontSize:14}}>{ctrl.title}</div></div><Badge text={ctrl.category}/></div><p style={{fontSize:12,color:C.muted,lineHeight:1.6,marginBottom:8}}>{ctrl.description}</p><div style={{fontSize:12,color:C.muted,marginBottom:4}}><span style={{color:C.text,fontWeight:600}}>Owner:</span> {ctrl.owner}</div><div style={{fontSize:12,color:C.muted,marginBottom:10}}><span style={{color:C.text,fontWeight:600}}>Testing:</span> {ctrl.testingCriteria}</div><div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:6}}>Required by:</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{ctrl.regulations.map(rId=>{const iS=inScopeIds.has(rId);const nm=allRegs.find(r=>r.id===rId)?.name||rId;return(<span key={rId} style={{fontSize:11,padding:"2px 8px",borderRadius:12,border:`1px solid ${iS?C.greenBorder:C.border}`,background:iS?C.greenBg:"transparent",color:iS?C.green:C.muted}}>{rId} - {nm.substring(0,25)}{iS?" (In Scope)":""}</span>);})}</div></div>);}){controls.length===0&&(inScopeIds.size>0||showAll)&&<div style={{textAlign:"center",color:C.muted,padding:"48px 0",fontSize:13}}>No controls match your filters</div>}</div>);
 }
 
-// ── SIDEBAR ───────────────────────────────────────────────────────────────────
-const NAV = [
-  { id:"dashboard", label:"Dashboard", icon:"M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" },
-  { id:"inventory", label:"Regulation Inventory", icon:"M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
-  { id:"analyze", label:"Analyze", icon:"M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" },
-  { id:"controls", label:"Controls Library", icon:"M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" },
-  { id:"timeline", label:"Timeline", icon:"M13 10V3L4 14h7v7l9-11h-7z" },
-  { id:"calendar", label:"Calendar", icon:"M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" },
-];
-
-function Sidebar({ active, onNav, onLogout, totalRegs, inScope }) {
-  return (
-    <aside className="fixed inset-y-0 left-0 w-60 bg-gray-950 border-r border-gray-800 flex flex-col z-40">
-      <div className="px-5 py-5 border-b border-gray-800">
-        <div className="text-lg font-bold text-white tracking-tight">DELPHI</div>
-        <div className="text-xs text-gray-500 mt-0.5">Marsh Regulatory Intelligence</div>
-      </div>
-      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-        {NAV.map(n => (
-          <button key={n.id} onClick={() => onNav(n.id)}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition text-left ${active === n.id ? "bg-indigo-600 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-white"}`}>
-            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d={n.icon}/></svg>
-            <span className="truncate">{n.label}</span>
-          </button>
-        ))}
-      </nav>
-      <div className="px-4 py-4 border-t border-gray-800 space-y-2">
-        <div className="text-xs text-gray-500 px-1">
-          <div className="flex justify-between"><span>Regulations:</span><span className="text-gray-300 font-medium">{totalRegs}</span></div>
-          <div className="flex justify-between mt-0.5"><span>In Scope:</span><span className="text-emerald-400 font-medium">{inScope}</span></div>
-        </div>
-        <button onClick={onLogout} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-gray-500 hover:bg-gray-800 hover:text-white transition">
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
-          Sign out
-        </button>
-      </div>
-    </aside>
-  );
+function Timeline({allRegs,scopeMap}){
+  const [filter,setFilter]=useState("All");
+  const withDeadlines=useMemo(()=>{let l=allRegs.filter(r=>r.deadline);if(filter==="In Scope")l=l.filter(r=>(scopeMap[r.id]||"Pending")==="In Scope");if(filter==="Upcoming")l=l.filter(r=>daysUntil(r.deadline)!==null&&daysUntil(r.deadline)>=0);return l.sort((a,b)=>new Date(a.deadline)-new Date(b.deadline));},[allRegs,scopeMap,filter]);
+  const grouped=useMemo(()=>{const g={};withDeadlines.forEach(r=>{const y=r.deadline.substring(0,4);if(!g[y])g[y]=[];g[y].push(r);});return g;},[withDeadlines]);
+  const sel={background:C.panel2,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"8px 12px",fontSize:13,cursor:"pointer",outline:"none"};
+  return(<div><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:8}}><div><h1 style={{fontSize:20,fontWeight:800,color:C.text}}>Regulatory Timeline</h1><p style={{fontSize:13,color:C.muted,marginTop:4}}>{withDeadlines.length} regulations with deadlines</p></div><select value={filter} onChange={e=>setFilter(e.target.value)} style={sel}><option>All</option><option>In Scope</option><option>Upcoming</option></select></div>{Object.keys(grouped).length===0&&<div style={{textAlign:"center",color:C.muted,padding:"64px 0"}}>No deadlines match your filter</div>}{Object.entries(grouped).sort().map(([year,regs])=>(<div key={year} style={{marginBottom:32}}><div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}><div style={{fontSize:18,fontWeight:800,color:C.accent}}>{year}</div><div style={{height:1,flex:1,background:C.border}}/><span style={{fontSize:11,color:C.muted}}>{regs.length} deadline{regs.length!==1?"s":""}</span></div><div style={{paddingLeft:20,position:"relative"}}><div style={{position:"absolute",left:6,top:8,bottom:8,width:1,background:C.border}}/>{regs.map(r=>{const days=daysUntil(r.deadline);const col=urgencyColor(days);const cs=scopeMap[r.id]||"Pending";return(<div key={r.id} style={{position:"relative",display:"flex",alignItems:"flex-start",gap:16,marginBottom:10}}><div style={{position:"absolute",left:-16,top:14,width:10,height:10,borderRadius:"50%",border:`2px solid ${col}`,background:days!==null&&days<0?col:"transparent",flexShrink:0}}/><div style={{flex:1,background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:12,display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start"}}><div style={{flex:1,minWidth:0}}><div style={{fontWeight:600,color:C.text,fontSize:13}}>{r.name}</div><div style={{fontSize:11,color:C.muted,marginTop:2}}>{r.reference} - {r.region} - {r.domain}</div></div><div style={{textAlign:"right",flexShrink:0}}><div style={{fontWeight:700,fontSize:12,color:col}}>{formatDeadline(r.deadline)}</div><div style={{fontSize:11,color:C.muted,marginTop:2}}>{days<0?`${Math.abs(days)}d past`:days===0?"Today":`${days}d`}</div><div style={{marginTop:4}}><Badge text={cs} style={scopeStyle(cs)}/></div></div></div></div>);})}</div></div>))}</div>);
 }
 
-// ── STAT CARD ─────────────────────────────────────────────────────────────────
-function StatCard({ label, value, sub, color }) {
-  const c = { indigo:"border-indigo-500 bg-indigo-950/30 text-indigo-400", emerald:"border-emerald-500 bg-emerald-950/30 text-emerald-400", amber:"border-amber-500 bg-amber-950/30 text-amber-400", red:"border-red-500 bg-red-950/30 text-red-400", blue:"border-blue-500 bg-blue-950/30 text-blue-400" };
-  return (
-    <div className={`rounded-xl border-l-4 p-4 ${c[color] || c.indigo} bg-gray-900`}>
-      <div className={`text-2xl font-bold`}>{value}</div>
-      <div className="text-sm text-gray-300 mt-0.5 font-medium">{label}</div>
-      {sub && <div className="text-xs text-gray-500 mt-0.5">{sub}</div>}
-    </div>
-  );
+function Calendar({allRegs,scopeMap}){
+  const today=new Date();
+  const [viewDate,setViewDate]=useState(new Date(today.getFullYear(),today.getMonth(),1));
+  const [selectedDay,setSelectedDay]=useState(null);const [filter,setFilter]=useState("All");
+  const month=viewDate.getMonth();const year=viewDate.getFullYear();
+  const firstDay=new Date(year,month,1).getDay();const daysInMonth=new Date(year,month+1,0).getDate();
+  const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const withDeadlines=useMemo(()=>{let l=allRegs.filter(r=>r.deadline);if(filter==="In Scope")l=l.filter(r=>(scopeMap[r.id]||"Pending")==="In Scope");return l;},[allRegs,scopeMap,filter]);
+  const regsByDay=useMemo(()=>{const m={};withDeadlines.forEach(r=>{const d=new Date(r.deadline+"T00:00:00");if(d.getMonth()===month&&d.getFullYear()===year){const day=d.getDate();if(!m[day])m[day]=[];m[day].push(r);}});return m;},[withDeadlines,month,year]);
+  const sel={background:C.panel2,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"8px 12px",fontSize:13,cursor:"pointer",outline:"none"};
+  const btn={background:C.panel2,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"8px 12px",fontSize:13,cursor:"pointer"};
+  return(<div><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:8}}><div><h1 style={{fontSize:20,fontWeight:800,color:C.text}}>Regulatory Calendar</h1><p style={{fontSize:13,color:C.muted,marginTop:4}}>{MONTHS[month]} {year}</p></div><div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><select value={filter} onChange={e=>setFilter(e.target.value)} style={sel}><option>All</option><option>In Scope</option></select><button onClick={()=>setViewDate(new Date(year,month-1,1))} style={btn}>Prev</button><span style={{fontSize:13,fontWeight:700,color:C.text,minWidth:140,textAlign:"center"}}>{MONTHS[month]} {year}</span><button onClick={()=>setViewDate(new Date(year,month+1,1))} style={btn}>Next</button><button onClick={()=>{setViewDate(new Date(today.getFullYear(),today.getMonth(),1));setSelectedDay(null);}} style={{...btn,color:C.accent}}>Today</button></div></div><div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}><div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",borderBottom:`1px solid ${C.border}`}}>{["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=><div key={d} style={{padding:"8px 0",textAlign:"center",fontSize:11,fontWeight:700,color:C.muted,textTransform:"uppercase"}}>{d}</div>)}</div><div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)"}}>{Array.from({length:firstDay}).map((_,i)=><div key={`e${i}`} style={{minHeight:72,borderRight:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,background:C.bg}}/>)}{Array.from({length:daysInMonth}).map((_,i)=>{const day=i+1;const isToday=day===today.getDate()&&month===today.getMonth()&&year===today.getFullYear();const regsHere=regsByDay[day]||[];const isSel=selectedDay===day;return(<div key={day} onClick={()=>setSelectedDay(isSel?null:day)} style={{minHeight:72,borderRight:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:6,cursor:"pointer",background:isSel?"rgba(99,102,241,0.1)":"transparent"}}><div style={{fontSize:12,fontWeight:700,width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:"50%",marginBottom:4,background:isToday?C.accent:"transparent",color:isToday?"#fff":C.muted}}>{day}</div>{regsHere.slice(0,2).map(r=>{const col=urgencyColor(daysUntil(r.deadline));return(<div key={r.id} style={{fontSize:10,padding:"1px 4px",borderRadius:3,marginBottom:2,background:`${col}22`,color:col,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name.substring(0,18)}</div>);})}{regsHere.length>2&&<div style={{fontSize:10,color:C.muted}}>+{regsHere.length-2}</div>}</div>);})}</div></div>{selectedDay&&(regsByDay[selectedDay]||[]).length>0&&<div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:16,marginTop:12}}><div style={{fontWeight:700,color:C.text,fontSize:14,marginBottom:12}}>{MONTHS[month]} {selectedDay}, {year} - {(regsByDay[selectedDay]||[]).length} deadline{(regsByDay[selectedDay]||[]).length!==1?"s":""}</div>{(regsByDay[selectedDay]||[]).map(r=>{const days=daysUntil(r.deadline);return(<div key={r.id} style={{display:"flex",justifyContent:"space-between",gap:12,paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${C.border}`}}><div><div style={{fontWeight:600,color:C.text,fontSize:13}}>{r.name}</div><div style={{fontSize:11,color:C.muted,marginTop:2}}>{r.reference} - {r.region}</div></div><div style={{textAlign:"right",flexShrink:0}}><Badge text={scopeMap[r.id]||"Pending"} style={scopeStyle(scopeMap[r.id]||"Pending")}/><div style={{fontSize:11,marginTop:4,color:urgencyColor(days)}}>{days===0?"Today":days<0?`${Math.abs(days)}d past`:`${days}d`}</div></div></div>);})}</div>}</div>);
 }
 
-// ── DASHBOARD ─────────────────────────────────────────────────────────────────
-function Dashboard({ allRegs, scopeMap, analysisMap }) {
-  const byScope = useMemo(() => {
-    const c = {"In Scope":0,"Out of Scope":0,"Pending":0};
-    allRegs.forEach(r => { const s = scopeMap[r.id] || "Pending"; if (s in c) c[s]++; });
-    return c;
-  }, [allRegs, scopeMap]);
-  const analyzed = useMemo(() => Object.keys(analysisMap).length, [analysisMap]);
-  const upcoming = useMemo(() => allRegs.filter(r => { if (!r.deadline) return false; const d = daysUntil(r.deadline); return d !== null && d >= 0 && d <= 180; }).sort((a,b) => new Date(a.deadline) - new Date(b.deadline)).slice(0,8), [allRegs]);
-  const byDomain = useMemo(() => {
-    const m = {};
-    allRegs.forEach(r => {
-      if (!m[r.domain]) m[r.domain] = {total:0,inScope:0};
-      m[r.domain].total++;
-      if ((scopeMap[r.id] || "Pending") === "In Scope") m[r.domain].inScope++;
-    });
-    return Object.entries(m).sort((a,b) => b[1].total - a[1].total);
-  }, [allRegs, scopeMap]);
-  const byRegion = useMemo(() => {
-    const m = {};
-    allRegs.forEach(r => { if (!m[r.region]) m[r.region] = 0; m[r.region]++; });
-    return Object.entries(m).sort((a,b) => b[1]-a[1]);
-  }, [allRegs]);
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-bold text-white">Compliance Posture Dashboard</h1>
-        <p className="text-sm text-gray-400 mt-0.5">Global regulatory inventory overview for Marsh entities</p>
-      </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <StatCard label="Total Regulations" value={allRegs.length} color="indigo"/>
-        <StatCard label="In Scope" value={byScope["In Scope"]} sub="Regulations applicable" color="emerald"/>
-        <StatCard label="Out of Scope" value={byScope["Out of Scope"]} sub="Excluded" color="red"/>
-        <StatCard label="Pending Review" value={byScope["Pending"]} sub="Awaiting determination" color="amber"/>
-        <StatCard label="Analyzed" value={analyzed} sub="AI analysis complete" color="blue"/>
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Domain breakdown */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-white mb-3">Regulations by Domain</h3>
-          <div className="space-y-2">
-            {byDomain.map(([dom,{total,inScope}]) => (
-              <div key={dom} className="flex items-center gap-3">
-                <div className="text-xs text-gray-400 w-36 truncate flex-shrink-0">{dom}</div>
-                <div className="flex-1 bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                  <div className="h-full bg-indigo-500 rounded-full" style={{width:`${(total/allRegs.length)*100}%`}}/>
-                </div>
-                <div className="text-xs text-gray-300 w-6 text-right">{total}</div>
-                <div className="text-xs text-emerald-400 w-14 text-right">{inScope} in scope</div>
-              </div>
-            ))}
-          </div>
-        </div>
-        {/* Upcoming deadlines */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-white mb-3">Upcoming Deadlines (180 days)</h3>
-          {upcoming.length === 0 ? (
-            <p className="text-xs text-gray-500 py-4 text-center">No deadlines in the next 180 days</p>
-          ) : (
-            <div className="space-y-2">
-              {upcoming.map(r => {
-                const days = daysUntil(r.deadline);
-                return (
-                  <div key={r.id} className="flex items-start gap-3 py-1.5 border-b border-gray-800 last:border-0">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium text-white truncate">{r.name}</div>
-                      <div className="text-xs text-gray-500">{r.region} · {r.domain}</div>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <div className="text-xs font-semibold" style={{color: urgencyColor(days)}}>{formatDeadline(r.deadline)}</div>
-                      <div className="text-xs text-gray-500">{days === 0 ? "Today" : `${days}d`}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-        {/* By region */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-white mb-3">Regulations by Region</h3>
-          <div className="grid grid-cols-2 gap-2">
-            {byRegion.map(([reg,cnt]) => (
-              <div key={reg} className="flex items-center gap-2 text-xs">
-                <span className="text-base">{regionFlag[reg] || "🌐"}</span>
-                <span className="text-gray-400 flex-1">{reg}</span>
-                <span className="text-gray-200 font-medium">{cnt}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        {/* Scope pie */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-white mb-3">Scope Determination Status</h3>
-          <div className="space-y-3 mt-4">
-            {Object.entries(byScope).map(([s,cnt]) => {
-              const pct = allRegs.length ? ((cnt/allRegs.length)*100).toFixed(0) : 0;
-              const col = {["In Scope"]:"bg-emerald-500",["Out of Scope"]:"bg-red-500",Pending:"bg-amber-500"}[s];
-              return (
-                <div key={s}>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-gray-400">{s}</span>
-                    <span className="text-gray-200">{cnt} ({pct}%)</span>
-                  </div>
-                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                    <div className={`h-full rounded-full ${col}`} style={{width:`${pct}%`}}/>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── INVENTORY ─────────────────────────────────────────────────────────────────
-function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, isAdmin }) {
-  const [search, setSearch] = useState("");
-  const [domain, setDomain] = useState("All");
-  const [region, setRegion] = useState("All");
-  const [scope, setScope] = useState("All");
-  const [sortField, setSortField] = useState("name");
-  const [sortDir, setSortDir] = useState("asc");
-  const [page, setPage] = useState(1);
-  const [deleteConfirm, setDeleteConfirm] = useState(null);
-  const PER_PAGE = 20;
-
-  const filtered = useMemo(() => {
-    let list = [...allRegs];
-    if (search) { const q = search.toLowerCase(); list = list.filter(r => r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || r.tags?.some(t => t.toLowerCase().includes(q))); }
-    if (domain !== "All") list = list.filter(r => r.domain === domain);
-    if (region !== "All") list = list.filter(r => r.region === region);
-    if (scope !== "All") list = list.filter(r => (scopeMap[r.id] || "Pending") === scope);
-    list.sort((a,b) => {
-      let va = sortField === "scope" ? (scopeMap[a.id]||"Pending") : sortField === "status" ? (analysisMap[a.id] ? "Analyzed" : a.status) : a[sortField] || "";
-      let vb = sortField === "scope" ? (scopeMap[b.id]||"Pending") : sortField === "status" ? (analysisMap[b.id] ? "Analyzed" : b.status) : b[sortField] || "";
-      return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
-    });
-    return list;
-  }, [allRegs, search, domain, region, scope, scopeMap, analysisMap, sortField, sortDir]);
-
-  const pages = Math.ceil(filtered.length / PER_PAGE);
-  const paged = filtered.slice((page-1)*PER_PAGE, page*PER_PAGE);
-
-  const sortBy = (f) => { if (sortField === f) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortField(f); setSortDir("asc"); } setPage(1); };
-  const Th = ({f,children}) => (
-    <th onClick={() => sortBy(f)} className="px-3 py-2.5 text-left text-xs font-medium text-gray-400 cursor-pointer hover:text-white select-none whitespace-nowrap">
-      <span className="flex items-center gap-1">{children}{sortField===f && <span className="text-indigo-400">{sortDir==="asc"?"↑":"↓"}</span>}</span>
-    </th>
-  );
-
-  const confirmDelete = (id) => {
-    if (deleteConfirm === id) { onDelete(id); setDeleteConfirm(null); }
-    else { setDeleteConfirm(id); setTimeout(() => setDeleteConfirm(null), 3000); }
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-xl font-bold text-white">Regulation Inventory</h1>
-          <p className="text-sm text-gray-400">{filtered.length} regulations {filtered.length !== allRegs.length && `(${allRegs.length} total)`}</p>
-        </div>
-        {isAdmin && <Badge color="indigo">Admin Mode</Badge>}
-      </div>
-      {/* Filters */}
-      <div className="flex flex-wrap gap-2">
-        <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
-          placeholder="Search regulations, references, tags…"
-          className="flex-1 min-w-56 bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500"/>
-        <select value={domain} onChange={e => { setDomain(e.target.value); setPage(1); }} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
-          <option>All</option>{DOMAINS.map(d => <option key={d}>{d}</option>)}
-        </select>
-        <select value={region} onChange={e => { setRegion(e.target.value); setPage(1); }} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
-          <option>All</option>{["EU","US","UK","APAC","Global","Canada","LATAM","Middle East","Africa"].map(r => <option key={r}>{r}</option>)}
-        </select>
-        <select value={scope} onChange={e => { setScope(e.target.value); setPage(1); }} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
-          <option>All</option><option>In Scope</option><option>Out of Scope</option><option>Pending</option>
-        </select>
-      </div>
-      {/* Table */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-800/60 border-b border-gray-700">
-              <tr>
-                <Th f="id">ID</Th>
-                <Th f="name">Regulation</Th>
-                <Th f="region">Region</Th>
-                <Th f="domain">Domain</Th>
-                <Th f="status">Status</Th>
-                <Th f="scope">Scope</Th>
-                <th className="px-3 py-2.5 text-left text-xs text-gray-400">Deadline</th>
-                <th className="px-3 py-2.5 text-left text-xs text-gray-400">Scope / Admin</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-800">
-              {paged.map(r => {
-                const regStatus = analysisMap[r.id] ? "Analyzed" : r.status;
-                const currentScope = scopeMap[r.id] || "Pending";
-                const days = daysUntil(r.deadline);
-                return (
-                  <tr key={r.id} className="hover:bg-gray-800/40 transition">
-                    <td className="px-3 py-2.5 text-xs text-gray-500 font-mono">{r.id}</td>
-                    <td className="px-3 py-2.5">
-                      <div className="font-medium text-white text-sm leading-tight max-w-xs">{r.name}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">{r.reference}</div>
-                    </td>
-                    <td className="px-3 py-2.5 text-sm">{regionFlag[r.region]} {r.region}</td>
-                    <td className="px-3 py-2.5"><Badge color="gray" small>{r.domain}</Badge></td>
-                    <td className="px-3 py-2.5"><Badge color={statusBadge(regStatus)} small>{regStatus}</Badge></td>
-                    <td className="px-3 py-2.5"><Badge color={scopeBadge(currentScope)} small>{currentScope}</Badge></td>
-                    <td className="px-3 py-2.5 text-xs whitespace-nowrap">
-                      {r.deadline ? <span style={{color:urgencyColor(days)}}>{formatDeadline(r.deadline)}{days !== null && days >= 0 && <span className="ml-1 text-gray-500">({days}d)</span>}</span> : <span className="text-gray-600">—</span>}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <select value={currentScope}
-                          onChange={e => onScopeChange(r.id, e.target.value)}
-                          className="text-xs bg-gray-800 border border-gray-700 text-gray-300 rounded px-2 py-1 outline-none">
-                          <option>Pending</option><option>In Scope</option><option>Out of Scope</option>
-                        </select>
-                        {isAdmin && (
-                          <button onClick={() => confirmDelete(r.id)}
-                            className={`text-xs px-2 py-1 rounded transition ${deleteConfirm===r.id ? "bg-red-600 text-white" : "bg-gray-800 text-gray-500 hover:text-red-400 hover:bg-gray-700"}`}>
-                            {deleteConfirm===r.id ? "Confirm" : "✕"}
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-              {paged.length === 0 && (
-                <tr><td colSpan={8} className="text-center py-12 text-gray-500 text-sm">No regulations match your filters</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        {pages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-800">
-            <span className="text-xs text-gray-500">Page {page} of {pages} · {filtered.length} results</span>
-            <div className="flex gap-1">
-              <button onClick={() => setPage(p => Math.max(1, p-1))} disabled={page===1} className="px-2.5 py-1 rounded text-xs bg-gray-800 text-gray-300 disabled:opacity-40 hover:bg-gray-700">←</button>
-              {Array.from({length:Math.min(5,pages)}, (_,i) => { const pg = Math.max(1,Math.min(pages-4, page-2))+i; return (
-                <button key={pg} onClick={() => setPage(pg)} className={`px-2.5 py-1 rounded text-xs ${pg===page?"bg-indigo-600 text-white":"bg-gray-800 text-gray-300 hover:bg-gray-700"}`}>{pg}</button>
-              ); })}
-              <button onClick={() => setPage(p => Math.min(pages, p+1))} disabled={page===pages} className="px-2.5 py-1 rounded text-xs bg-gray-800 text-gray-300 disabled:opacity-40 hover:bg-gray-700">→</button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── ANALYZE ────────────────────────────────────────────────────────────────────
-function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComplete }) {
-  const [selected, setSelected] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState(null);
-
-  const reg = allRegs.find(r => r.id === selected);
-  const existingAnalysis = selected ? analysisMap[selected] : null;
-
-  useEffect(() => {
-    if (existingAnalysis) setResult(existingAnalysis);
-    else setResult(null);
-  }, [selected, existingAnalysis]);
-
-  const inScopeIds = useMemo(() => new Set(Object.entries(scopeMap).filter(([,v])=>v==="In Scope").map(([k])=>k)), [scopeMap]);
-  const existingControlIds = useMemo(() => {
-    const ctrlSet = new Set();
-    CONTROLS_LIBRARY.forEach(c => { if (c.regulations.some(rId => inScopeIds.has(rId) && rId !== selected)) ctrlSet.add(c.controlId); });
-    return ctrlSet;
-  }, [inScopeIds, selected]);
-
-  const analyze = async () => {
-    if (!reg) return;
-    setLoading(true); setError(""); setResult(null);
-    const allExistingControls = CONTROLS_LIBRARY
-      .filter(c => c.regulations.some(rId => inScopeIds.has(rId) && rId !== selected))
-      .map(c => `${c.controlId}: ${c.title}`)
-      .join("\n");
-    const regControls = CONTROLS_LIBRARY.filter(c => c.regulations.includes(selected));
-    const prompt = `You are a senior regulatory compliance expert for Marsh McLennan.
-
-Analyze this regulation for Marsh:
-Name: ${reg.name}
-Reference: ${reg.reference}
-Region: ${reg.region}
-Domain: ${reg.domain}
-Status: ${reg.status}
-Effective Date: ${reg.effectiveDate}
-Deadline: ${reg.deadline || "N/A"}
-Summary: ${reg.summary}
-Applicable Marsh entities: ${reg.marshEntities?.join(", ")}
-
-Existing controls already in place (from other In Scope regulations):
-${allExistingControls || "None yet"}
-
-Controls mapped to this regulation in the library:
-${regControls.map(c=>`${c.controlId}: ${c.title}`).join("\n") || "None mapped yet"}
-
-Provide a JSON response (no markdown fences) with:
-{
-  "executiveSummary": "2-3 sentence summary of the regulation's impact on Marsh",
-  "businessRisk": "High|Medium|Low",
-  "riskRationale": "1-2 sentences explaining the risk rating",
-  "keyObligations": ["obligation 1", "obligation 2", "obligation 3", "obligation 4", "obligation 5"],
-  "applicableEntities": ["entity1", "entity2"],
-  "newControls": [
-    {"title": "control title", "description": "what Marsh must do", "priority": "Immediate|Short-term|Ongoing", "isNew": true}
-  ],
-  "gapAnalysis": "Assessment of the compliance gap and work remaining",
-  "deadlineRisk": "Commentary on timeline pressure if applicable",
-  "recommendedActions": ["action 1", "action 2", "action 3"]
-}
-newControls should highlight ONLY controls that are not already covered by existing controls.`;
-    try {
-      const res = await fetch(PROXY_URL, { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ model:"claude-opus-4-5", max_tokens:2000, messages:[{role:"user",content:prompt}] })
-      });
-      if (!res.ok) throw new Error(`API error ${res.status}`);
-      const data = await res.json();
-      const text = data.content?.[0]?.text || data.content || "";
-      let parsed;
-      try { parsed = JSON.parse(text); }
-      catch { const m = text.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); else throw new Error("Could not parse response"); }
-      onAnalysisComplete(selected, parsed);
-      setResult(parsed);
-    } catch(e) { setError(e.message || "Analysis failed"); }
-    finally { setLoading(false); }
-  };
-
-  const riskColor = (r) => ({High:"text-red-400",Medium:"text-amber-400",Low:"text-emerald-400"}[r]||"text-gray-400");
-
-  return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-white">Analyze Regulation</h1>
-        <p className="text-sm text-gray-400 mt-0.5">AI-powered compliance analysis with gap assessment</p>
-      </div>
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4">
-        <div>
-          <label className="text-xs font-medium text-gray-400 uppercase tracking-wider block mb-2">Select Regulation</label>
-          <select value={selected} onChange={e => setSelected(e.target.value)}
-            className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2.5 text-sm outline-none focus:border-indigo-500">
-            <option value="">— Select a regulation to analyze —</option>
-            {allRegs.map(r => <option key={r.id} value={r.id}>{r.id}: {r.name}</option>)}
-          </select>
-        </div>
-        {reg && (
-          <div className="bg-gray-800/50 rounded-lg p-4 space-y-2">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="font-semibold text-white">{reg.name}</div>
-                <div className="text-xs text-gray-500 mt-0.5">{reg.reference} · {reg.region} · {reg.domain}</div>
-              </div>
-              <div className="flex gap-2 flex-shrink-0">
-                <Badge color={statusBadge(analysisMap[selected] ? "Analyzed" : reg.status)} small>{analysisMap[selected] ? "Analyzed" : reg.status}</Badge>
-                <Badge color={scopeBadge(scopeMap[selected]||"Pending")} small>{scopeMap[selected]||"Pending"}</Badge>
-              </div>
-            </div>
-            <p className="text-xs text-gray-400 leading-relaxed">{reg.summary}</p>
-            {reg.deadline && <div className="text-xs" style={{color:urgencyColor(daysUntil(reg.deadline))}}>⏱ Deadline: {formatDeadline(reg.deadline)} ({daysUntil(reg.deadline)} days)</div>}
-            <div className="flex items-center gap-3 pt-1">
-              <label className="text-xs text-gray-400">Scope:</label>
-              <select value={scopeMap[selected]||"Pending"} onChange={e => onScopeChange(selected, e.target.value)}
-                className="text-xs bg-gray-700 border border-gray-600 text-gray-200 rounded px-2 py-1 outline-none">
-                <option>Pending</option><option>In Scope</option><option>Out of Scope</option>
-              </select>
-            </div>
-          </div>
-        )}
-        <button onClick={analyze} disabled={!selected || loading}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold px-5 py-2.5 rounded-lg text-sm transition">
-          {loading ? (<><svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>Analyzing…</>) : "Run Analysis"}
-        </button>
-        {error && <div className="bg-red-950/50 border border-red-800 text-red-300 text-sm rounded-lg p-3">{error}</div>}
-      </div>
-      {result && (
-        <div className="space-y-4">
-          {/* Executive summary */}
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-white">Executive Summary</h3>
-              <span className={`text-sm font-bold ${riskColor(result.businessRisk)}`}>
-                {result.businessRisk} Risk
-              </span>
-            </div>
-            <p className="text-sm text-gray-300 leading-relaxed">{result.executiveSummary}</p>
-            {result.riskRationale && <p className="text-xs text-gray-500 mt-2 italic">{result.riskRationale}</p>}
-          </div>
-          {/* Key obligations */}
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-            <h3 className="font-semibold text-white mb-3">Key Obligations</h3>
-            <ul className="space-y-2">
-              {result.keyObligations?.map((o,i) => (
-                <li key={i} className="flex items-start gap-2 text-sm text-gray-300">
-                  <span className="text-indigo-400 mt-0.5 flex-shrink-0">→</span>{o}
-                </li>
-              ))}
-            </ul>
-          </div>
-          {/* Gap analysis */}
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-            <h3 className="font-semibold text-white mb-2">Gap Analysis</h3>
-            <p className="text-sm text-gray-300 leading-relaxed">{result.gapAnalysis}</p>
-          </div>
-          {/* New controls — highlighted */}
-          {result.newControls?.length > 0 && (
-            <div className="bg-indigo-950/30 border border-indigo-700/50 rounded-xl p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/></svg>
-                <h3 className="font-semibold text-indigo-300">New Controls Required ({result.newControls.length})</h3>
-                <span className="text-xs text-indigo-500 ml-1">— not covered by existing in-scope regulations</span>
-              </div>
-              <div className="space-y-3">
-                {result.newControls.map((c,i) => (
-                  <div key={i} className="bg-indigo-900/20 border border-indigo-800/40 rounded-lg p-3">
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <span className="font-medium text-indigo-200 text-sm">{c.title}</span>
-                      <Badge color={c.priority==="Immediate"?"red":c.priority==="Short-term"?"amber":"blue"} small>{c.priority}</Badge>
-                    </div>
-                    <p className="text-xs text-gray-400 leading-relaxed">{c.description}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {/* Recommended actions */}
-          {result.recommendedActions?.length > 0 && (
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-              <h3 className="font-semibold text-white mb-3">Recommended Actions</h3>
-              <ol className="space-y-2">
-                {result.recommendedActions.map((a,i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-gray-300">
-                    <span className="text-xs text-gray-500 bg-gray-800 rounded px-1.5 py-0.5 mt-0.5 flex-shrink-0 font-mono">{i+1}</span>{a}
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-          {result.deadlineRisk && (
-            <div className="bg-amber-950/30 border border-amber-800/40 rounded-xl p-4">
-              <div className="flex items-start gap-2"><span className="text-amber-400">⚠</span><p className="text-sm text-amber-200">{result.deadlineRisk}</p></div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── CONTROLS LIBRARY ──────────────────────────────────────────────────────────
-function Controls({ allRegs, scopeMap, analysisMap }) {
-  const [cat, setCat] = useState("All");
-  const [search, setSearch] = useState("");
-  const [showAll, setShowAll] = useState(false);
-
-  const inScopeIds = useMemo(() => new Set(Object.entries(scopeMap).filter(([,v])=>v==="In Scope").map(([k])=>k)), [scopeMap]);
-  const categories = useMemo(() => ["All", ...new Set(CONTROLS_LIBRARY.map(c => c.category))], []);
-
-  const controls = useMemo(() => {
-    let list = CONTROLS_LIBRARY;
-    if (!showAll) list = list.filter(c => c.regulations.some(rId => inScopeIds.has(rId)));
-    if (cat !== "All") list = list.filter(c => c.category === cat);
-    if (search) { const q = search.toLowerCase(); list = list.filter(c => c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q) || c.owner.toLowerCase().includes(q)); }
-    return list;
-  }, [inScopeIds, cat, search, showAll]);
-
-  const regName = (id) => allRegs.find(r => r.id === id)?.name || id;
-  const isInScope = (id) => inScopeIds.has(id);
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-white">Controls Library</h1>
-        <p className="text-sm text-gray-400 mt-0.5">
-          {showAll ? `All controls (${controls.length})` : `Controls for In Scope regulations (${controls.length})`}
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-2 items-center">
-        <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search controls…"
-          className="flex-1 min-w-48 bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500"/>
-        <select value={cat} onChange={e => setCat(e.target.value)} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
-          {categories.map(c => <option key={c}>{c}</option>)}
-        </select>
-        <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
-          <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} className="accent-indigo-500"/>
-          Show all controls
-        </label>
-      </div>
-      {inScopeIds.size === 0 && !showAll && (
-        <div className="bg-amber-950/30 border border-amber-800/40 rounded-xl p-6 text-center">
-          <p className="text-amber-300 text-sm">No regulations are marked In Scope yet.</p>
-          <p className="text-amber-500 text-xs mt-1">Mark regulations as In Scope in the Inventory tab to see required controls.</p>
-        </div>
-      )}
-      <div className="grid gap-3">
-        {controls.map(ctrl => (
-          <div key={ctrl.controlId} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-            <div className="flex items-start justify-between gap-3 mb-2">
-              <div>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-xs font-mono text-gray-500">{ctrl.controlId}</span>
-                  <Badge color={ctrl.priority==="Immediate"?"red":ctrl.priority==="Short-term"?"amber":"blue"} small>{ctrl.priority}</Badge>
-                </div>
-                <div className="font-semibold text-white">{ctrl.title}</div>
-              </div>
-              <Badge color="gray" small>{ctrl.category}</Badge>
-            </div>
-            <p className="text-sm text-gray-400 leading-relaxed mb-3">{ctrl.description}</p>
-            <div className="text-xs text-gray-500 mb-2"><span className="text-gray-400 font-medium">Owner:</span> {ctrl.owner}</div>
-            <div className="text-xs text-gray-500 mb-3"><span className="text-gray-400 font-medium">Testing:</span> {ctrl.testingCriteria}</div>
-            {/* Source regulations */}
-            <div>
-              <div className="text-xs text-gray-500 font-medium mb-1.5">Required by:</div>
-              <div className="flex flex-wrap gap-1">
-                {ctrl.regulations.map(rId => (
-                  <span key={rId} className={`text-xs px-2 py-0.5 rounded-full border ${isInScope(rId) ? "border-emerald-700 bg-emerald-950/40 text-emerald-300" : "border-gray-700 bg-gray-800 text-gray-500"}`}>
-                    {rId} · {allRegs.find(r=>r.id===rId)?.name?.substring(0,30) || rId}{isInScope(rId) && " ✓"}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-        ))}
-        {controls.length === 0 && (
-          <div className="text-center py-12 text-gray-500 text-sm">No controls match your filters</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── TIMELINE ──────────────────────────────────────────────────────────────────
-function Timeline({ allRegs, scopeMap }) {
-  const [filter, setFilter] = useState("All");
-  const withDeadlines = useMemo(() => {
-    let list = allRegs.filter(r => r.deadline);
-    if (filter === "In Scope") list = list.filter(r => (scopeMap[r.id]||"Pending") === "In Scope");
-    if (filter === "Upcoming") list = list.filter(r => daysUntil(r.deadline) !== null && daysUntil(r.deadline) >= 0);
-    return list.sort((a,b) => new Date(a.deadline) - new Date(b.deadline));
-  }, [allRegs, scopeMap, filter]);
-
-  const grouped = useMemo(() => {
-    const groups = {};
-    withDeadlines.forEach(r => {
-      const yr = r.deadline.substring(0,4);
-      if (!groups[yr]) groups[yr] = [];
-      groups[yr].push(r);
-    });
-    return groups;
-  }, [withDeadlines]);
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-white">Regulatory Timeline</h1>
-          <p className="text-sm text-gray-400">{withDeadlines.length} regulations with deadlines</p>
-        </div>
-        <select value={filter} onChange={e => setFilter(e.target.value)} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
-          <option>All</option><option>In Scope</option><option>Upcoming</option>
-        </select>
-      </div>
-      {Object.keys(grouped).length === 0 && (
-        <div className="text-center py-16 text-gray-500 text-sm">No regulations with deadlines match your filter</div>
-      )}
-      <div className="space-y-8">
-        {Object.entries(grouped).sort().map(([year, regs]) => (
-          <div key={year}>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="text-lg font-bold text-indigo-400">{year}</div>
-              <div className="h-px flex-1 bg-gray-800"/>
-              <span className="text-xs text-gray-500">{regs.length} deadline{regs.length!==1?"s":""}</span>
-            </div>
-            <div className="relative pl-6 space-y-3">
-              <div className="absolute left-2 top-2 bottom-2 w-px bg-gray-800"/>
-              {regs.map(r => {
-                const days = daysUntil(r.deadline);
-                const currentScope = scopeMap[r.id] || "Pending";
-                return (
-                  <div key={r.id} className="relative flex items-start gap-4">
-                    <div className="absolute -left-4 w-3 h-3 rounded-full border-2 mt-1" style={{borderColor: urgencyColor(days), backgroundColor: days !== null && days < 0 ? urgencyColor(days) : "transparent"}}/>
-                    <div className="flex-1 bg-gray-900 border border-gray-800 rounded-lg p-3 hover:border-gray-700 transition">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium text-white text-sm leading-tight">{r.name}</div>
-                          <div className="text-xs text-gray-500 mt-0.5">{r.reference} · {r.region} · {r.domain}</div>
-                        </div>
-                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                          <div className="font-semibold text-sm" style={{color:urgencyColor(days)}}>{formatDeadline(r.deadline)}</div>
-                          {days !== null && <div className="text-xs text-gray-500">{days < 0 ? `${Math.abs(days)}d past` : days === 0 ? "Today" : `${days}d`}</div>}
-                          <Badge color={scopeBadge(currentScope)} small>{currentScope}</Badge>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── CALENDAR ──────────────────────────────────────────────────────────────────
-function Calendar({ allRegs, scopeMap }) {
-  const today = new Date();
-  const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
-  const [selectedDay, setSelectedDay] = useState(null);
-  const [filter, setFilter] = useState("All");
-
-  const withDeadlines = useMemo(() => {
-    let list = allRegs.filter(r => r.deadline);
-    if (filter === "In Scope") list = list.filter(r => (scopeMap[r.id]||"Pending") === "In Scope");
-    return list;
-  }, [allRegs, scopeMap, filter]);
-
-  const month = viewDate.getMonth();
-  const year = viewDate.getFullYear();
-  const firstDay = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month+1, 0).getDate();
-
-  const regsByDay = useMemo(() => {
-    const m = {};
-    withDeadlines.forEach(r => {
-      const d = new Date(r.deadline + "T00:00:00");
-      if (d.getMonth() === month && d.getFullYear() === year) {
-        const day = d.getDate();
-        if (!m[day]) m[day] = [];
-        m[day].push(r);
-      }
-    });
-    return m;
-  }, [withDeadlines, month, year]);
-
-  const selectedRegs = selectedDay ? regsByDay[selectedDay] || [] : [];
-  const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-white">Regulatory Calendar</h1>
-          <p className="text-sm text-gray-400">{withDeadlines.filter(r => { const d = new Date(r.deadline+"T00:00:00"); return d.getMonth()===month&&d.getFullYear()===year; }).length} deadlines in {months[month]} {year}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <select value={filter} onChange={e => setFilter(e.target.value)} className="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-lg px-3 py-2 outline-none">
-            <option>All</option><option>In Scope</option>
-          </select>
-          <button onClick={() => setViewDate(new Date(year, month-1, 1))} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition">←</button>
-          <span className="text-sm font-semibold text-white w-36 text-center">{months[month]} {year}</span>
-          <button onClick={() => setViewDate(new Date(year, month+1, 1))} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition">→</button>
-          <button onClick={() => { setViewDate(new Date(today.getFullYear(), today.getMonth(), 1)); setSelectedDay(null); }} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-sm text-gray-300 rounded-lg transition">Today</button>
-        </div>
-      </div>
-      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-        <div className="grid grid-cols-7 border-b border-gray-800">
-          {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => (
-            <div key={d} className="py-2 text-center text-xs font-medium text-gray-500">{d}</div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7">
-          {Array.from({length: firstDay}).map((_,i) => <div key={`empty-${i}`} className="min-h-16 border-r border-b border-gray-800 bg-gray-950/30"/>)}
-          {Array.from({length: daysInMonth}).map((_,i) => {
-            const day = i+1;
-            const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-            const hasRegs = regsByDay[day]?.length > 0;
-            const isSelected = selectedDay === day;
-            const regsHere = regsByDay[day] || [];
-            const minDays = regsHere.length > 0 ? Math.min(...regsHere.map(r => daysUntil(r.deadline))) : null;
-            return (
-              <div key={day} onClick={() => setSelectedDay(isSelected ? null : day)}
-                className={`min-h-16 border-r border-b border-gray-800 p-1.5 cursor-pointer transition ${isSelected ? "bg-indigo-950/50" : hasRegs ? "hover:bg-gray-800/50" : "hover:bg-gray-800/20"}`}>
-                <div className={`text-xs font-semibold w-6 h-6 flex items-center justify-center rounded-full mb-1 ${isToday ? "bg-indigo-500 text-white" : "text-gray-400"}`}>{day}</div>
-                {regsHere.slice(0,2).map(r => (
-                  <div key={r.id} className="text-xs px-1 py-0.5 rounded truncate mb-0.5" style={{backgroundColor: urgencyColor(daysUntil(r.deadline))+"22", color: urgencyColor(daysUntil(r.deadline))}}>
-                    {r.name.substring(0,18)}…
-                  </div>
-                ))}
-                {regsHere.length > 2 && <div className="text-xs text-gray-500">+{regsHere.length-2} more</div>}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      {selectedDay && selectedRegs.length > 0 && (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <h3 className="font-semibold text-white mb-3">{months[month]} {selectedDay}, {year} — {selectedRegs.length} deadline{selectedRegs.length!==1?"s":""}</h3>
-          <div className="space-y-2">
-            {selectedRegs.map(r => (
-              <div key={r.id} className="flex items-start justify-between gap-3 py-2 border-b border-gray-800 last:border-0">
-                <div>
-                  <div className="font-medium text-white text-sm">{r.name}</div>
-                  <div className="text-xs text-gray-500">{r.reference} · {r.region} · {r.domain}</div>
-                </div>
-                <div className="flex flex-col items-end gap-1">
-                  <Badge color={scopeBadge(scopeMap[r.id]||"Pending")} small>{scopeMap[r.id]||"Pending"}</Badge>
-                  <div className="text-xs" style={{color:urgencyColor(daysUntil(r.deadline))}}>
-                    {daysUntil(r.deadline) === 0 ? "Today" : daysUntil(r.deadline) < 0 ? `${Math.abs(daysUntil(r.deadline))}d past` : `${daysUntil(r.deadline)}d remaining`}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── MAIN APP ──────────────────────────────────────────────────────────────────
-export default function App() {
-  const [authed, setAuthed] = useState(() => storage.get(SESSION_KEY, false));
-  const [view, setView] = useState("dashboard");
-  const [scopeMap, setScopeMap] = useState(() => storage.get(SCOPE_KEY, {}));
-  const [analysisMap, setAnalysisMap] = useState(() => storage.get(ANALYSIS_KEY, {}));
-  const [deletedIds, setDeletedIds] = useState(() => storage.get("delphi_deleted", []));
-  const [isAdmin, setIsAdmin] = useState(() => storage.get("delphi_admin", false));
-  const [showAdminToggle, setShowAdminToggle] = useState(false);
-
-  // Merge base regulations with any custom additions, minus deleted
-  const allRegs = useMemo(() => {
-    const deletedSet = new Set(deletedIds);
-    return REGULATIONS.filter(r => !deletedSet.has(r.id));
-  }, [deletedIds]);
-
-  const inScopeCount = useMemo(() => Object.values(scopeMap).filter(v => v === "In Scope").length, [scopeMap]);
-
-  const login = () => { setAuthed(true); storage.set(SESSION_KEY, true); };
-  const logout = () => { setAuthed(false); storage.set(SESSION_KEY, false); };
-
-  const setScopeFor = useCallback((id, val) => {
-    setScopeMap(prev => { const n = {...prev, [id]: val}; storage.set(SCOPE_KEY, n); return n; });
-  }, []);
-
-  const onAnalysisComplete = useCallback((id, data) => {
-    setAnalysisMap(prev => { const n = {...prev, [id]: data}; storage.set(ANALYSIS_KEY, n); return n; });
-  }, []);
-
-  const onDelete = useCallback((id) => {
-    setDeletedIds(prev => { const n = [...prev, id]; storage.set("delphi_deleted", n); return n; });
-  }, []);
-
-  if (!authed) return <Login onLogin={login}/>;
-
-  const viewProps = { allRegs, scopeMap, analysisMap };
-
-  return (
-    <div className="min-h-screen bg-gray-950 text-white">
-      <Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount}/>
-      <main className="ml-60 min-h-screen">
-        <div className="max-w-6xl mx-auto p-6">
-          {/* Admin mode toggle */}
-          <div className="flex justify-end mb-4">
-            <button onClick={() => { const v = !isAdmin; setIsAdmin(v); storage.set("delphi_admin",v); }}
-              className={`text-xs px-3 py-1.5 rounded-lg border transition ${isAdmin ? "border-red-700 bg-red-950/40 text-red-300" : "border-gray-700 bg-gray-800 text-gray-500 hover:text-gray-300"}`}>
-              {isAdmin ? "🔐 Admin Mode ON" : "Admin Mode"}
-            </button>
-          </div>
-          {view === "dashboard" && <Dashboard {...viewProps}/>}
-          {view === "inventory" && <Inventory {...viewProps} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin}/>}
-          {view === "analyze" && <Analyze {...viewProps} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete}/>}
-          {view === "controls" && <Controls {...viewProps}/>}
-          {view === "timeline" && <Timeline {...viewProps}/>}
-          {view === "calendar" && <Calendar {...viewProps}/>}
-        </div>
-      </main>
-    </div>
-  );
+export default function App(){
+  const [authed,setAuthed]=useState(()=>storage.get(SESSION_KEY,false));
+  const [view,setView]=useState("dashboard");
+  const [scopeMap,setScopeMap]=useState(()=>storage.get(SCOPE_KEY,{}));
+  const [analysisMap,setAnalysisMap]=useState(()=>storage.get(ANALYSIS_KEY,{}));
+  const [deletedIds,setDeletedIds]=useState(()=>storage.get("delphi_deleted",[]));
+  const [isAdmin,setIsAdmin]=useState(()=>storage.get("delphi_admin",false));
+  const allRegs=useMemo(()=>{const d=new Set(deletedIds);return REGULATIONS.filter(r=>!d.has(r.id));},[deletedIds]);
+  const inScopeCount=useMemo(()=>Object.values(scopeMap).filter(v=>v==="In Scope").length,[scopeMap]);
+  const login=()=>{setAuthed(true);storage.set(SESSION_KEY,true);};
+  const logout=()=>{setAuthed(false);storage.set(SESSION_KEY,false);};
+  const setScopeFor=useCallback((id,val)=>{setScopeMap(prev=>{const n={...prev,[id]:val};storage.set(SCOPE_KEY,n);return n;});},[]);
+  const onAnalysisComplete=useCallback((id,data)=>{setAnalysisMap(prev=>{const n={...prev,[id]:data};storage.set(ANALYSIS_KEY,n);return n;});},[]);
+  const onDelete=useCallback((id)=>{setDeletedIds(prev=>{const n=[...prev,id];storage.set("delphi_deleted",n);return n;});},[]);
+  if(!authed)return <Login onLogin={login}/>;
+  const vp={allRegs,scopeMap,analysisMap};
+  return(<div style={{minHeight:"100vh",background:C.bg,color:C.text}}><style>{G}</style><Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount}/><main style={{marginLeft:220,minHeight:"100vh"}}><div style={{maxWidth:1100,margin:"0 auto",padding:"24px 28px"}}><div style={{display:"flex",justifyContent:"flex-end",marginBottom:16}}><button onClick={()=>{const v=!isAdmin;setIsAdmin(v);storage.set("delphi_admin",v);}} style={{fontSize:12,padding:"6px 14px",borderRadius:8,cursor:"pointer",border:`1px solid ${isAdmin?C.redBorder:C.border}`,background:isAdmin?C.redBg:"transparent",color:isAdmin?C.red:C.muted}}>{isAdmin?"Admin Mode ON (click to disable)":"Admin Mode"}</button></div>{view==="dashboard"&&<Dashboard {...vp}/>}{view==="inventory"&&<Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin}/>}{view==="analyze"&&<Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete}/>}{view==="controls"&&<Controls {...vp}/>}{view==="timeline"&&<Timeline {...vp}/>}{view==="calendar"&&<Calendar {...vp}/>}</div></main></div>);
 }
