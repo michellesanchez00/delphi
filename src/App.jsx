@@ -120,7 +120,9 @@ Rules: businessRisk must be High, Medium, or Low. priority must be Immediate, Sh
       const res=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-5",max_tokens:2000,messages:[{role:"user",content:prompt}]})});
       if(!res.ok)throw new Error(`API error ${res.status}`);
       const data=await res.json();
-      const text=data.content?.[0]?.text||"";
+      const raw=data.content?.[0]?.text||"";
+      // Strip markdown code fences if present
+      const text=raw.replace(/^```(?:json)?\s*/i,'').replace(/```\s*$/,'').trim();
       // Robustly extract and clean JSON from the response
       let parsed;
       try {
