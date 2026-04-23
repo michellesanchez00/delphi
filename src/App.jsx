@@ -81,12 +81,67 @@ function Analyze({allRegs,scopeMap,onScopeChange,analysisMap,onAnalysisComplete}
     if(!reg)return;setLoading(true);setError("");setResult(null);
     const existingCtrl=CONTROLS_LIBRARY.filter(c=>c.regulations.some(rId=>inScopeIds.has(rId)&&rId!==selected)).map(c=>`${c.controlId}: ${c.title}`).join("\n");
     const regCtrl=CONTROLS_LIBRARY.filter(c=>c.regulations.includes(selected));
-    const prompt=`You are a senior regulatory compliance expert for Marsh McLennan. Analyze this regulation:\nName: ${reg.name}\nReference: ${reg.reference}\nRegion: ${reg.region}\nDomain: ${reg.domain}\nEffective: ${reg.effectiveDate}\nDeadline: ${reg.deadline||"N/A"}\nSummary: ${reg.summary}\nMarsh entities: ${reg.marshEntities?.join(", ")}\n\nExisting controls already in place:\n${existingCtrl||"None yet"}\n\nControls mapped to this regulation:\n${regCtrl.map(c=>`${c.controlId}: ${c.title}`).join("\n")||"None mapped"}\n\nRespond ONLY with valid JSON (no markdown):\n{"executiveSummary":"...","businessRisk":"High|Medium|Low","riskRationale":"...","keyObligations":["..."],"newControls":[{"title":"...","description":"...","priority":"Immediate|Short-term|Ongoing"}],"gapAnalysis":"...","deadlineRisk":"...","recommendedActions":["..."]}\nnewControls = controls NOT already covered by existing in-scope regulations.`;
+    const prompt=`You are a senior regulatory compliance expert for Marsh McLennan.
+
+IMPORTANT: Your ENTIRE response must be a single valid JSON object. No markdown, no backticks, no explanation outside JSON. All string values must be properly escaped. Do not use newlines inside string values.
+
+Analyze this regulation for Marsh:
+Name: ${reg.name}
+Reference: ${reg.reference}
+Region: ${reg.region}
+Domain: ${reg.domain}
+Effective: ${reg.effectiveDate}
+Deadline: ${reg.deadline||"N/A"}
+Summary: ${reg.summary}
+Marsh entities: ${(reg.marshEntities||[]).join(", ")}
+
+Existing controls already in place (from other In Scope regulations):
+${existingCtrl||"None yet"}
+
+Controls mapped to this regulation in the library:
+${regCtrl.map(c=>`${c.controlId}: ${c.title}`).join(", ")||"None mapped"}
+
+Return ONLY this JSON structure with no other text:
+{"executiveSummary":"2-3 sentence impact summary","businessRisk":"High","riskRationale":"one sentence","keyObligations":["obligation 1","obligation 2","obligation 3"],"newControls":[{"title":"control name","description":"what to do","priority":"Immediate"}],"gapAnalysis":"gap assessment paragraph","deadlineRisk":"deadline commentary or empty string","recommendedActions":["action 1","action 2","action 3"]}
+
+Rules: businessRisk must be High, Medium, or Low. priority must be Immediate, Short-term, or Ongoing. newControls should only include controls NOT already covered by existing controls listed above.`;
     try{
       const res=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-5",max_tokens:2000,messages:[{role:"user",content:prompt}]})});
       if(!res.ok)throw new Error(`API error ${res.status}`);
-      const data=await res.json();const text=data.content?.[0]?.text||"";
-      let parsed;try{parsed=JSON.parse(text);}catch{const m=text.match(/\{[\s\S]*\}/);if(m)parsed=JSON.parse(m[0]);else throw new Error("Could not parse response");}
+      const data=await res.json();
+      const text=data.content?.[0]?.text||"";
+      // Robustly extract and clean JSON from the response
+      let parsed;
+      try {
+        // Try direct parse first
+        parsed=JSON.parse(text);
+      } catch {
+        try {
+          // Extract JSON block
+          const m=text.match(/\{[\s\S]*\}/);
+          if(!m) throw new Error("No JSON found in response");
+          let jsonStr=m[0];
+          // Fix common Claude JSON issues:
+          // 1. Remove trailing commas before } or ]
+          jsonStr=jsonStr.replace(/,\s*([}\]])/g,'$1');
+          // 2. Fix unescaped newlines inside strings
+          jsonStr=jsonStr.replace(/([^\\])\n/g,'$1 ');
+          // 3. Fix unescaped quotes inside string values (basic)
+          parsed=JSON.parse(jsonStr);
+        } catch(e2) {
+          // Last resort: build a minimal result from the text
+          parsed={
+            executiveSummary:"Analysis completed but response could not be fully parsed. Please try again.",
+            businessRisk:"Medium",
+            riskRationale:"See raw output below.",
+            keyObligations:[text.substring(0,500)],
+            newControls:[],
+            gapAnalysis:"Please re-run the analysis.",
+            deadlineRisk:"",
+            recommendedActions:["Re-run analysis for structured output"]
+          };
+        }
+      }
       onAnalysisComplete(selected,parsed);setResult(parsed);
     }catch(e){setError(e.message||"Analysis failed");}
     finally{setLoading(false);}
