@@ -104,7 +104,58 @@ function Controls({allRegs,scopeMap}){
   const controls=useMemo(()=>{let l=CONTROLS_LIBRARY;if(!showAll)l=l.filter(c=>c.regulations.some(rId=>inScopeIds.has(rId)));if(cat!=="All")l=l.filter(c=>c.category===cat);if(search){const q=search.toLowerCase();l=l.filter(c=>c.title.toLowerCase().includes(q)||c.description.toLowerCase().includes(q));}return l;},[inScopeIds,cat,search,showAll]);
   const card={background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:16,marginBottom:10};
   const inp={background:C.panel2,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"8px 12px",fontSize:13,outline:"none"};
-  return(<div><div style={{marginBottom:16}}><h1 style={{fontSize:20,fontWeight:800,color:C.text}}>Controls Library</h1><p style={{fontSize:13,color:C.muted,marginTop:4}}>{controls.length} controls {showAll?"(all)":"(in-scope regulations)"}</p></div><div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search controls..." style={{...inp,flex:1,minWidth:180}}/><select value={cat} onChange={e=>setCat(e.target.value)} style={{...inp,cursor:"pointer"}}>{categories.map(c=><option key={c}>{c}</option>)}</select><label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}><input type="checkbox" checked={showAll} onChange={e=>setShowAll(e.target.checked)} style={{accentColor:C.accent}}/>Show all</label></div>{inScopeIds.size===0&&!showAll&&<div style={{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:12,padding:20,textAlign:"center",marginBottom:16}}><div style={{color:C.amber,fontSize:13,fontWeight:600}}>No regulations are marked In Scope yet</div><div style={{color:C.muted,fontSize:12,marginTop:4}}>Set regulations to In Scope in the Inventory tab</div></div>}{controls.map(ctrl=>{const pc={Immediate:C.red,"Short-term":C.amber,Ongoing:C.blue}[ctrl.priority]||C.blue;return(<div key={ctrl.controlId} style={card}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:8}}><div><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}><span style={{fontFamily:"monospace",fontSize:11,color:C.muted}}>{ctrl.controlId}</span><Badge text={ctrl.priority} style={{bg:`${pc}22`,border:`${pc}44`,color:pc}}/></div><div style={{fontWeight:700,color:C.text,fontSize:14}}>{ctrl.title}</div></div><Badge text={ctrl.category}/></div><p style={{fontSize:12,color:C.muted,lineHeight:1.6,marginBottom:8}}>{ctrl.description}</p><div style={{fontSize:12,color:C.muted,marginBottom:4}}><span style={{color:C.text,fontWeight:600}}>Owner:</span> {ctrl.owner}</div><div style={{fontSize:12,color:C.muted,marginBottom:10}}><span style={{color:C.text,fontWeight:600}}>Testing:</span> {ctrl.testingCriteria}</div><div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:6}}>Required by:</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{ctrl.regulations.map(rId=>{const iS=inScopeIds.has(rId);const nm=allRegs.find(r=>r.id===rId)?.name||rId;return(<span key={rId} style={{fontSize:11,padding:"2px 8px",borderRadius:12,border:`1px solid ${iS?C.greenBorder:C.border}`,background:iS?C.greenBg:"transparent",color:iS?C.green:C.muted}}>{rId} - {nm.substring(0,25)}{iS?" (In Scope)":""}</span>);})}</div></div>);}){controls.length===0&&(inScopeIds.size>0||showAll)&&<div style={{textAlign:"center",color:C.muted,padding:"48px 0",fontSize:13}}>No controls match your filters</div>}</div>);
+  return(
+    <div>
+      <div style={{marginBottom:16}}>
+        <h1 style={{fontSize:20,fontWeight:800,color:C.text}}>Controls Library</h1>
+        <p style={{fontSize:13,color:C.muted,marginTop:4}}>{controls.length} controls {showAll?"(all)":"(in-scope)"}</p>
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search controls..." style={{...inp,flex:1,minWidth:180}}/>
+        <select value={cat} onChange={e=>setCat(e.target.value)} style={{...inp,cursor:"pointer"}}>{categories.map(c=><option key={c}>{c}</option>)}</select>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.muted,cursor:"pointer"}}>
+          <input type="checkbox" checked={showAll} onChange={e=>setShowAll(e.target.checked)} style={{accentColor:C.accent}}/>Show all
+        </label>
+      </div>
+      {inScopeIds.size===0&&!showAll&&(
+        <div style={{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:12,padding:20,textAlign:"center",marginBottom:16}}>
+          <div style={{color:C.amber,fontSize:13,fontWeight:600}}>No regulations are marked In Scope yet</div>
+          <div style={{color:C.muted,fontSize:12,marginTop:4}}>Set regulations to In Scope in the Inventory tab</div>
+        </div>
+      )}
+      {controls.map(ctrl=>{
+        const pc={Immediate:C.red,"Short-term":C.amber,Ongoing:C.blue}[ctrl.priority]||C.blue;
+        return(
+          <div key={ctrl.controlId} style={card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:8}}>
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                  <span style={{fontFamily:"monospace",fontSize:11,color:C.muted}}>{ctrl.controlId}</span>
+                  <Badge text={ctrl.priority} style={{bg:`${pc}22`,border:`${pc}44`,color:pc}}/>
+                </div>
+                <div style={{fontWeight:700,color:C.text,fontSize:14}}>{ctrl.title}</div>
+              </div>
+              <Badge text={ctrl.category}/>
+            </div>
+            <p style={{fontSize:12,color:C.muted,lineHeight:1.6,marginBottom:8}}>{ctrl.description}</p>
+            <div style={{fontSize:12,color:C.muted,marginBottom:4}}><span style={{color:C.text,fontWeight:600}}>Owner:</span> {ctrl.owner}</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10}}><span style={{color:C.text,fontWeight:600}}>Testing:</span> {ctrl.testingCriteria}</div>
+            <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:6}}>Required by:</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+              {ctrl.regulations.map(rId=>{
+                const iS=inScopeIds.has(rId);
+                const nm=allRegs.find(r=>r.id===rId)?.name||rId;
+                return(<span key={rId} style={{fontSize:11,padding:"2px 8px",borderRadius:12,border:`1px solid ${iS?C.greenBorder:C.border}`,background:iS?C.greenBg:"transparent",color:iS?C.green:C.muted}}>{rId} - {nm.substring(0,25)}{iS?" (In Scope)":""}</span>);
+              })}
+            </div>
+          </div>
+        );
+      })}
+      {controls.length===0&&(inScopeIds.size>0||showAll)&&(
+        <div style={{textAlign:"center",color:C.muted,padding:"48px 0",fontSize:13}}>No controls match your filters</div>
+      )}
+    </div>
+  );
 }
 
 function Timeline({allRegs,scopeMap}){
