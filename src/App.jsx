@@ -14,19 +14,19 @@ const JSONBIN_HEADERS = { "Content-Type": "application/json", "X-Master-Key": JS
 
 let _binCache = null;
 const remoteStore = {
-  async getAll() {
-    if (_binCache) return _binCache;
-    const r = await fetch(JSONBIN_URL + "/latest", { headers: JSONBIN_HEADERS });
+  async getAll(bustCache) {
+    if (!bustCache && _binCache) return _binCache;
+    const r = await fetch(JSONBIN_URL + "/latest", { headers: JSONBIN_HEADERS, cache: "no-store" });
     const d = await r.json();
     _binCache = d.record || {};
     return _binCache;
   },
-  async get(key) {
-    try { const all = await this.getAll(); return all[key] ?? null; } catch { return null; }
+  async get(key, bustCache) {
+    try { const all = await this.getAll(bustCache); return all[key] ?? null; } catch { return null; }
   },
   async set(key, value) {
     try {
-      const all = await this.getAll();
+      const all = await this.getAll(false);
       const updated = { ...all, [key]: value };
       await fetch(JSONBIN_URL, { method: "PUT", headers: JSONBIN_HEADERS, body: JSON.stringify(updated) });
       _binCache = updated;
@@ -299,21 +299,20 @@ export default function App(){
   // Load shared data from remote on mount, migrate from localStorage if remote is empty
   useEffect(()=>{
     const load=(isFirst)=>{
-      _binCache=null;
-      Promise.all([remoteStore.get("delphi_scope"),remoteStore.get("delphi_analyses")])
+      Promise.all([remoteStore.get("delphi_scope",true),remoteStore.get("delphi_analyses",true)])
         .then(([scope,analyses])=>{
           if(isFirst){
             const localScope=storage.get(SCOPE_KEY,{});
             const localAnalyses=storage.get(ANALYSIS_KEY,{});
             const finalScope=scope&&Object.keys(scope).length>0?scope:localScope;
             const finalAnalyses=analyses&&Object.keys(analyses).length>0?analyses:localAnalyses;
-            setScopeMap(finalScope);
-            setAnalysisMap(finalAnalyses);
+            setScopeMap({...finalScope});
+            setAnalysisMap({...finalAnalyses});
             if((!scope||Object.keys(scope).length===0)&&Object.keys(localScope).length>0) remoteStore.set("delphi_scope",finalScope);
             if((!analyses||Object.keys(analyses).length===0)&&Object.keys(localAnalyses).length>0) remoteStore.set("delphi_analyses",finalAnalyses);
           } else {
-            if(scope&&Object.keys(scope).length>0) setScopeMap(scope);
-            if(analyses&&Object.keys(analyses).length>0) setAnalysisMap(analyses);
+            if(scope&&Object.keys(scope).length>0) setScopeMap(prev=>JSON.stringify(prev)!==JSON.stringify(scope)?{...scope}:prev);
+            if(analyses&&Object.keys(analyses).length>0) setAnalysisMap(prev=>JSON.stringify(prev)!==JSON.stringify(analyses)?{...analyses}:prev);
           }
         })
         .finally(()=>{if(isFirst)setDataLoading(false);});
