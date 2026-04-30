@@ -7,7 +7,7 @@ const SESSION_KEY = "delphi_auth";
 const SCOPE_KEY = "delphi_scope";
 const ANALYSIS_KEY = "delphi_analyses";
 
-const JSONBIN_KEY = "YOUR_MASTER_KEY";  // replace with your $2b$... key
+const JSONBIN_KEY = "$2a$10$nY52ddUvcB.nOkkqL2Rz5.FLU7LeIE4hyH7O1tOJ7SoHvU7di65Xi";
 const JSONBIN_BIN = "69f39261856a6821898fd552";
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN}`;
 const JSONBIN_HEADERS = { "Content-Type": "application/json", "X-Master-Key": JSONBIN_KEY };
