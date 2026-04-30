@@ -7,22 +7,30 @@ const SESSION_KEY = "delphi_auth";
 const SCOPE_KEY = "delphi_scope";
 const ANALYSIS_KEY = "delphi_analyses";
 
+const JSONBIN_KEY = "YOUR_MASTER_KEY";  // replace with your $2b$... key
+const JSONBIN_BIN = "69f39261856a6821898fd552";
+const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN}`;
+const JSONBIN_HEADERS = { "Content-Type": "application/json", "X-Master-Key": JSONBIN_KEY };
+
+let _binCache = null;
 const remoteStore = {
+  async getAll() {
+    if (_binCache) return _binCache;
+    const r = await fetch(JSONBIN_URL + "/latest", { headers: JSONBIN_HEADERS });
+    const d = await r.json();
+    _binCache = d.record || {};
+    return _binCache;
+  },
   async get(key) {
-    try {
-      const r = await fetch(`${STORE_URL}?key=${key}`);
-      const d = await r.json();
-      return d.value ?? null;
-    } catch { return null; }
+    try { const all = await this.getAll(); return all[key] ?? null; } catch { return null; }
   },
   async set(key, value) {
     try {
-      await fetch(STORE_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key, value }),
-      });
-    } catch { /* fall through */ }
+      const all = await this.getAll();
+      const updated = { ...all, [key]: value };
+      await fetch(JSONBIN_URL, { method: "PUT", headers: JSONBIN_HEADERS, body: JSON.stringify(updated) });
+      _binCache = updated;
+    } catch { /* silent */ }
   },
 };
 
