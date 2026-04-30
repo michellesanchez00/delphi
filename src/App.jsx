@@ -298,20 +298,29 @@ export default function App(){
 
   // Load shared data from remote on mount, migrate from localStorage if remote is empty
   useEffect(()=>{
-    Promise.all([remoteStore.get("delphi_scope"),remoteStore.get("delphi_analyses")])
-      .then(([scope,analyses])=>{
-        const localScope=storage.get(SCOPE_KEY,{});
-        const localAnalyses=storage.get(ANALYSIS_KEY,{});
-        // Use remote if it has data, otherwise migrate from localStorage
-        const finalScope=scope&&Object.keys(scope).length>0?scope:localScope;
-        const finalAnalyses=analyses&&Object.keys(analyses).length>0?analyses:localAnalyses;
-        setScopeMap(finalScope);
-        setAnalysisMap(finalAnalyses);
-        // If remote was empty but local had data, push it up
-        if((!scope||Object.keys(scope).length===0)&&Object.keys(localScope).length>0) remoteStore.set("delphi_scope",finalScope);
-        if((!analyses||Object.keys(analyses).length===0)&&Object.keys(localAnalyses).length>0) remoteStore.set("delphi_analyses",finalAnalyses);
-      })
-      .finally(()=>setDataLoading(false));
+    const load=(isFirst)=>{
+      _binCache=null;
+      Promise.all([remoteStore.get("delphi_scope"),remoteStore.get("delphi_analyses")])
+        .then(([scope,analyses])=>{
+          if(isFirst){
+            const localScope=storage.get(SCOPE_KEY,{});
+            const localAnalyses=storage.get(ANALYSIS_KEY,{});
+            const finalScope=scope&&Object.keys(scope).length>0?scope:localScope;
+            const finalAnalyses=analyses&&Object.keys(analyses).length>0?analyses:localAnalyses;
+            setScopeMap(finalScope);
+            setAnalysisMap(finalAnalyses);
+            if((!scope||Object.keys(scope).length===0)&&Object.keys(localScope).length>0) remoteStore.set("delphi_scope",finalScope);
+            if((!analyses||Object.keys(analyses).length===0)&&Object.keys(localAnalyses).length>0) remoteStore.set("delphi_analyses",finalAnalyses);
+          } else {
+            if(scope&&Object.keys(scope).length>0) setScopeMap(scope);
+            if(analyses&&Object.keys(analyses).length>0) setAnalysisMap(analyses);
+          }
+        })
+        .finally(()=>{if(isFirst)setDataLoading(false);});
+    };
+    load(true);
+    const interval=setInterval(()=>load(false),30000);
+    return()=>clearInterval(interval);
   },[]);
 
   const allRegs=useMemo(()=>{const d=new Set(deletedIds);return REGULATIONS.filter(r=>!d.has(r.id));},[deletedIds]);
