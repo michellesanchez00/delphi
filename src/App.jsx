@@ -296,31 +296,43 @@ export default function App(){
   const [analyzeRegId,setAnalyzeRegId]=useState(null);
   const [dataLoading,setDataLoading]=useState(true);
 
-  // Load shared data from remote on mount, migrate from localStorage if remote is empty
-  useEffect(()=>{
-    const load=(isFirst)=>{
-      Promise.all([remoteStore.get("delphi_scope",true),remoteStore.get("delphi_analyses",true)])
-        .then(([scope,analyses])=>{
-          if(isFirst){
-            const localScope=storage.get(SCOPE_KEY,{});
-            const localAnalyses=storage.get(ANALYSIS_KEY,{});
-            const finalScope=scope&&Object.keys(scope).length>0?scope:localScope;
-            const finalAnalyses=analyses&&Object.keys(analyses).length>0?analyses:localAnalyses;
-            setScopeMap({...finalScope});
-            setAnalysisMap({...finalAnalyses});
-            if((!scope||Object.keys(scope).length===0)&&Object.keys(localScope).length>0) remoteStore.set("delphi_scope",finalScope);
-            if((!analyses||Object.keys(analyses).length===0)&&Object.keys(localAnalyses).length>0) remoteStore.set("delphi_analyses",finalAnalyses);
-          } else {
-            if(scope&&Object.keys(scope).length>0) setScopeMap(prev=>JSON.stringify(prev)!==JSON.stringify(scope)?{...scope}:prev);
-            if(analyses&&Object.keys(analyses).length>0) setAnalysisMap(prev=>JSON.stringify(prev)!==JSON.stringify(analyses)?{...analyses}:prev);
-          }
-        })
-        .finally(()=>{if(isFirst)setDataLoading(false);});
-    };
-    load(true);
-    const interval=setInterval(()=>load(false),30000);
-    return()=>clearInterval(interval);
+  const [syncing,setSyncing]=useState(false);
+  const [lastSync,setLastSync]=useState(null);
+
+  const syncFromRemote=useCallback(async(showLoader)=>{
+    if(showLoader)setSyncing(true);
+    try{
+      const r=await fetch(JSONBIN_URL+"/latest",{headers:JSONBIN_HEADERS,cache:"no-store"});
+      const d=await r.json();
+      const rec=d.record||{};
+      if(rec.delphi_scope&&Object.keys(rec.delphi_scope).length>0) setScopeMap({...rec.delphi_scope});
+      if(rec.delphi_analyses&&Object.keys(rec.delphi_analyses).length>0) setAnalysisMap({...rec.delphi_analyses});
+      setLastSync(new Date());
+    }catch(e){console.error("Sync failed",e);}
+    finally{if(showLoader)setSyncing(false);}
   },[]);
+
+  // Load on mount with localStorage migration
+  useEffect(()=>{
+    (async()=>{
+      const r=await fetch(JSONBIN_URL+"/latest",{headers:JSONBIN_HEADERS,cache:"no-store"});
+      const d=await r.json();
+      const rec=d.record||{};
+      const localScope=storage.get(SCOPE_KEY,{});
+      const localAnalyses=storage.get(ANALYSIS_KEY,{});
+      const finalScope=rec.delphi_scope&&Object.keys(rec.delphi_scope).length>0?rec.delphi_scope:localScope;
+      const finalAnalyses=rec.delphi_analyses&&Object.keys(rec.delphi_analyses).length>0?rec.delphi_analyses:localAnalyses;
+      setScopeMap({...finalScope});
+      setAnalysisMap({...finalAnalyses});
+      if((!rec.delphi_scope||Object.keys(rec.delphi_scope).length===0)&&Object.keys(localScope).length>0) remoteStore.set("delphi_scope",finalScope);
+      if((!rec.delphi_analyses||Object.keys(rec.delphi_analyses).length===0)&&Object.keys(localAnalyses).length>0) remoteStore.set("delphi_analyses",finalAnalyses);
+      setLastSync(new Date());
+      setDataLoading(false);
+    })().catch(()=>setDataLoading(false));
+  },[]);
+
+  // Refresh from remote whenever user switches tabs
+  useEffect(()=>{if(!dataLoading)syncFromRemote(false);},[view]);
 
   const allRegs=useMemo(()=>{const d=new Set(deletedIds);return REGULATIONS.filter(r=>!d.has(r.id));},[deletedIds]);
   const inScopeCount=useMemo(()=>Object.values(scopeMap).filter(v=>v==="In Scope").length,[scopeMap]);
@@ -333,5 +345,5 @@ export default function App(){
   if(!authed)return <Login onLogin={login}/>;
   if(dataLoading)return(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",color:C.muted,fontSize:14}}>Loading DELPHI data...</div>);
   const vp={allRegs,scopeMap,analysisMap};
-  return(<div style={{minHeight:"100vh",background:C.bg,color:C.text}}><style>{G}</style><Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount}/><main style={{marginLeft:220,minHeight:"100vh"}}><div style={{maxWidth:1100,margin:"0 auto",padding:"24px 28px"}}><div style={{display:"flex",justifyContent:"flex-end",marginBottom:16}}><button onClick={()=>{const v=!isAdmin;setIsAdmin(v);storage.set("delphi_admin",v);}} style={{fontSize:12,padding:"6px 14px",borderRadius:8,cursor:"pointer",border:`1px solid ${isAdmin?C.redBorder:C.border}`,background:isAdmin?C.redBg:"transparent",color:isAdmin?C.red:C.muted}}>{isAdmin?"Admin Mode ON (click to disable)":"Admin Mode"}</button></div>{view==="dashboard"&&<Dashboard {...vp}/>}{view==="inventory"&&<Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin} onAnalyzeClick={(id)=>{setAnalyzeRegId(id);setView("analyze");}}/>}{view==="analyze"&&<Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={()=>setAnalyzeRegId(null)}/>}{view==="controls"&&<Controls {...vp} isAdmin={isAdmin} onDeleteControl={onDeleteControl} deletedControlIds={deletedControlIds}/>}{view==="timeline"&&<Timeline {...vp}/>}{view==="calendar"&&<Calendar {...vp}/>}</div></main></div>);
+  return(<div style={{minHeight:"100vh",background:C.bg,color:C.text}}><style>{G}</style><Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount}/><main style={{marginLeft:220,minHeight:"100vh"}}><div style={{maxWidth:1100,margin:"0 auto",padding:"24px 28px"}}><div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:16,alignItems:"center"}}>{lastSync&&<span style={{fontSize:11,color:C.muted}}>Synced {lastSync.toLocaleTimeString()}</span>}<button onClick={()=>syncFromRemote(true)} disabled={syncing} style={{fontSize:12,padding:"6px 14px",borderRadius:8,cursor:"pointer",border:`1px solid ${C.border}`,background:"transparent",color:syncing?C.muted:C.accent,opacity:syncing?0.6:1}}>{syncing?"Syncing...":"↻ Sync"}</button><button onClick={()=>{const v=!isAdmin;setIsAdmin(v);storage.set("delphi_admin",v);}} style={{fontSize:12,padding:"6px 14px",borderRadius:8,cursor:"pointer",border:`1px solid ${isAdmin?C.redBorder:C.border}`,background:isAdmin?C.redBg:"transparent",color:isAdmin?C.red:C.muted}}>{isAdmin?"Admin Mode ON":"Admin Mode"}</button></div>{view==="dashboard"&&<Dashboard {...vp}/>}{view==="inventory"&&<Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin} onAnalyzeClick={(id)=>{setAnalyzeRegId(id);setView("analyze");}}/>}{view==="analyze"&&<Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={()=>setAnalyzeRegId(null)}/>}{view==="controls"&&<Controls {...vp} isAdmin={isAdmin} onDeleteControl={onDeleteControl} deletedControlIds={deletedControlIds}/>}{view==="timeline"&&<Timeline {...vp}/>}{view==="calendar"&&<Calendar {...vp}/>}</div></main></div>);
 }
