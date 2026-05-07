@@ -543,10 +543,16 @@ function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComp
   const [loading, setLoading] = useState(false); const [error, setError] = useState(""); const [result, setResult] = useState(null);
   // File upload state
   const [uploadedFile, setUploadedFile] = useState(null); const [fileContent, setFileContent] = useState("");
-  // URL management state - use external persistent state if provided
-  const [localUrls, setLocalUrls] = useState(() => storage.get("delphi_urls", []));
-  const urls = externalUrls || localUrls;
-  const setUrls = onSaveUrls || ((list) => { setLocalUrls(list); storage.set("delphi_urls", list); });
+  // URL management state - always backed by remote store via onSaveUrls
+  const [localUrls, setLocalUrls] = useState(externalUrls || storage.get("delphi_urls", []));
+  // Keep local copy in sync when external changes (e.g. after remote sync)
+  useEffect(() => { if (externalUrls) setLocalUrls(externalUrls); }, [externalUrls]);
+  const urls = localUrls;
+  const setUrls = (newList) => {
+    setLocalUrls(newList);
+    if (onSaveUrls) onSaveUrls(newList); // persists to JSONBin + localStorage
+    else storage.set("delphi_urls", newList);
+  };
   const [newUrl, setNewUrl] = useState(""); const [editingUrl, setEditingUrl] = useState(null); const [editVal, setEditVal] = useState("");
   const [crawling, setCrawling] = useState(null);
   const [urlResults, setUrlResults] = useState(() => {
@@ -1220,7 +1226,11 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(() => storage.get("delphi_admin", false));
   const [analyzeRegId, setAnalyzeRegId] = useState(null);
   const [savedUrls, setSavedUrls] = useState(() => storage.get(URLS_KEY, []));
-  const savePersistentUrls = useCallback((newList) => { setSavedUrls(newList); storage.set(URLS_KEY, newList); jbSet(URLS_KEY, newList); }, []);
+  const savePersistentUrls = useCallback((newList) => {
+    setSavedUrls(newList);
+    storage.set(URLS_KEY, newList);
+    jbSet(URLS_KEY, newList);
+  }, []);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
 
@@ -1244,6 +1254,10 @@ export default function App() {
           const local = storage.get(SCOPE_KEY, {});
           if (Object.keys(local).length > 0) jbSet("delphi_scope", local);
         }
+        if (!rec.delphi_urls || rec.delphi_urls.length === 0) {
+          const localUrls = storage.get(URLS_KEY, []);
+          if (localUrls.length > 0) { jbSet(URLS_KEY, localUrls); setSavedUrls(localUrls); }
+        }
         setLastSync(new Date());
       } catch (e) { console.error("Background sync failed", e); }
     })();
@@ -1256,6 +1270,7 @@ export default function App() {
         const rec = await jbGet();
         if (rec.delphi_scope && Object.keys(rec.delphi_scope).length > 0) setScopeMap(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_scope) ? { ...rec.delphi_scope } : p);
         if (rec.delphi_analyses && Object.keys(rec.delphi_analyses).length > 0) setAnalysisMap(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_analyses) ? { ...rec.delphi_analyses } : p);
+        if (rec.delphi_urls?.length > 0) setSavedUrls(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_urls) ? rec.delphi_urls : p);
         setLastSync(new Date());
       } catch {}
     })();
@@ -1267,6 +1282,7 @@ export default function App() {
       const rec = await jbGet();
       if (rec.delphi_scope && Object.keys(rec.delphi_scope).length > 0) { setScopeMap({ ...rec.delphi_scope }); storage.set(SCOPE_KEY, rec.delphi_scope); }
       if (rec.delphi_analyses && Object.keys(rec.delphi_analyses).length > 0) { setAnalysisMap({ ...rec.delphi_analyses }); storage.set(ANALYSIS_KEY, rec.delphi_analyses); }
+      if (rec.delphi_urls?.length > 0) { setSavedUrls(rec.delphi_urls); storage.set(URLS_KEY, rec.delphi_urls); }
         if (rec.delphi_urls) { setSavedUrls(rec.delphi_urls); storage.set(URLS_KEY, rec.delphi_urls); }
       setLastSync(new Date());
     } catch { }
