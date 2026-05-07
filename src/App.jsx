@@ -6,6 +6,7 @@ const SESSION_KEY = "delphi_auth";
 const SCOPE_KEY = "delphi_scope";
 const ANALYSIS_KEY = "delphi_analyses";
 const URLS_KEY = "delphi_urls";
+const INGESTED_KEY = "delphi_ingested"; // regulations ingested from URL scans
 const JSONBIN_KEY = "$2a$10$nY52ddUvcB.nOkkqL2Rz5.FLU7LeIE4hyH7O1tOJ7SoHvU7di65Xi";
 const JSONBIN_BIN = "69f39261856a6821898fd552";
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN}`;
@@ -470,8 +471,9 @@ function Dashboard({ allRegs, scopeMap, analysisMap }) {
   );
 }
 
-function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, isAdmin, onAnalyzeClick }) {
+function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, isAdmin, onAnalyzeClick, ingestedRegs, onUpdateIngested, onClearChanges }) {
   const [search, setSearch] = useState(""); const [domain, setDomain] = useState("All"); const [region, setRegion] = useState("All"); const [scope, setScope] = useState("All"); const [page, setPage] = useState(1); const [delConfirm, setDelConfirm] = useState(null); const PER = 20;
+  const [editingReg, setEditingReg] = useState(null); const [editFields, setEditFields] = useState({});
   const filtered = useMemo(() => { let list = [...allRegs]; if (search) { const q = search.toLowerCase(); list = list.filter(r => r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || (r.tags || []).some(t => t.toLowerCase().includes(q))); } if (domain !== "All") list = list.filter(r => r.domain === domain); if (region !== "All") list = list.filter(r => r.region === region); if (scope !== "All") list = list.filter(r => (scopeMap[r.id] || "Pending") === scope); return list; }, [allRegs, search, domain, region, scope, scopeMap]);
   const pages = Math.ceil(filtered.length / PER); const paged = filtered.slice((page - 1) * PER, page * PER);
   const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "10px 14px", fontSize: 14, outline: "none" };
@@ -508,7 +510,26 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
                 const rs = analysisMap[r.id] ? "Analyzed" : r.status; const cs = scopeMap[r.id] || "Pending"; const days = daysUntil(r.deadline);
                 return (<tr key={r.id}>
                   <td style={{ ...td, fontFamily: "monospace", fontSize: 12, color: C.muted }}>{r.id}</td>
-                  <td style={td}><div style={{ fontWeight: 600, color: C.text, fontSize: 14, maxWidth: 320 }}>{r.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference}</div></td>
+                  <td style={td}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <div style={{ fontWeight: 600, color: C.text, fontSize: 14, maxWidth: 300 }}>{r.name}</div>
+                          {r.isIngested && <span style={{ fontSize: 10, color: C.indigo, background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, borderRadius: 4, padding: "1px 6px", flexShrink: 0 }}>ingested</span>}
+                          {r.hasChanges && (
+                            <span title="Changes detected — re-analysis recommended" style={{ fontSize: 10, color: C.amber, background: C.amberBg, border: `1px solid ${C.amberBorder}`, borderRadius: 4, padding: "1px 6px", flexShrink: 0, cursor: "default" }}>⚠ updated</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference}</div>
+                        {r.isIngested && r.sourceTitle && (
+                          <div style={{ fontSize: 11, color: C.indigo, marginTop: 2 }}>↗ {r.sourceTitle}</div>
+                        )}
+                      </div>
+                      {r.isIngested && onUpdateIngested && (
+                        <button onClick={() => { setEditingReg(r); setEditFields({ deadline: r.deadline || "", summary: r.summary || "", effectiveDate: r.effectiveDate || "" }); }} style={{ fontSize: 11, padding: "2px 7px", borderRadius: 5, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer", flexShrink: 0 }} title="Edit regulation details">✎</button>
+                      )}
+                    </div>
+                  </td>
                   <td style={{ ...td, fontSize: 13 }}>{r.region}</td>
                   <td style={td}><Badge text={r.domain} /></td>
                   <td style={td}><Badge text={rs} style={statusStyle(rs)} /></td>
@@ -518,14 +539,46 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
                     <select value={cs} onChange={e => onScopeChange(r.id, e.target.value)} style={{ background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 7, padding: "5px 10px", fontSize: 13, cursor: "pointer", outline: "none" }}><option>Pending</option><option>In Scope</option><option>Out of Scope</option></select>
                     {isAdmin && <button onClick={() => confirmDel(r.id)} style={{ fontSize: 12, padding: "5px 10px", borderRadius: 7, border: `1px solid ${delConfirm === r.id ? C.red : C.border}`, background: delConfirm === r.id ? C.redBg : "transparent", color: delConfirm === r.id ? C.red : C.muted, cursor: "pointer" }}>{delConfirm === r.id ? "Confirm" : "✕"}</button>}
                   </div></td>
-                  <td style={td}><button onClick={() => onAnalyzeClick(r.id)} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 7, border: `1px solid ${analysisMap[r.id] ? C.indigoBorder : C.border}`, background: analysisMap[r.id] ? C.indigoBg : "transparent", color: analysisMap[r.id] ? C.indigo : C.muted, cursor: "pointer", whiteSpace: "nowrap" }}>⚡ {analysisMap[r.id] ? "View Analysis" : "Analyze"}</button></td>
+                  <td style={td}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                      <button onClick={() => onAnalyzeClick(r.id)} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 7, border: `1px solid ${analysisMap[r.id] ? C.indigoBorder : C.border}`, background: analysisMap[r.id] ? C.indigoBg : "transparent", color: analysisMap[r.id] ? C.indigo : C.muted, cursor: "pointer", whiteSpace: "nowrap" }}>⚡ {analysisMap[r.id] ? "View Analysis" : "Analyze"}</button>
+                      {r.hasChanges && analysisMap[r.id] && (
+                        <button onClick={() => { if (onClearChanges) onClearChanges(r.id); onAnalyzeClick(r.id); }} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.amberBorder}`, background: C.amberBg, color: C.amber, cursor: "pointer", whiteSpace: "nowrap" }}>↻ Re-analyze</button>
+                      )}
+                    </div>
+                  </td>
                 </tr>);
               })}
               {paged.length === 0 && <tr><td colSpan={9} style={{ ...td, textAlign: "center", color: C.muted, padding: "56px 0" }}>No regulations match your filters</td></tr>}
             </tbody>
           </table>
         </div>
-        {pages > 1 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>
+              {/* Edit Ingested Regulation Modal */}
+      {editingReg && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setEditingReg(null)}>
+          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 28, width: 540, maxWidth: "90vw" }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: C.text, marginBottom: 4 }}>Edit Regulation</div>
+            <div style={{ fontSize: 13, color: C.indigo, marginBottom: 18 }}>{editingReg.name}</div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: "block", fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Deadline (YYYY-MM-DD)</label>
+              <input value={editFields.deadline} onChange={e => setEditFields(f => ({ ...f, deadline: e.target.value }))} placeholder="2025-12-31" style={{ width: "100%", background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 8, padding: "10px 14px", fontSize: 14, outline: "none" }} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: "block", fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Effective Date (YYYY-MM-DD)</label>
+              <input value={editFields.effectiveDate} onChange={e => setEditFields(f => ({ ...f, effectiveDate: e.target.value }))} placeholder="2024-01-01" style={{ width: "100%", background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 8, padding: "10px 14px", fontSize: 14, outline: "none" }} />
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: "block", fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Summary / Key Changes</label>
+              <textarea value={editFields.summary} onChange={e => setEditFields(f => ({ ...f, summary: e.target.value }))} rows={4} style={{ width: "100%", background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 8, padding: "10px 14px", fontSize: 14, outline: "none", resize: "vertical", fontFamily: "inherit" }} />
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => setEditingReg(null)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 14, cursor: "pointer" }}>Cancel</button>
+              <button onClick={() => { onUpdateIngested(editingReg.id, editFields); setEditingReg(null); }} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Save Changes</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pages > 1 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>
           <span style={{ fontSize: 13, color: C.muted }}>Page {page} of {pages} — {filtered.length} results</span>
           <div style={{ display: "flex", gap: 6 }}>
             <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} style={{ padding: "6px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, fontSize: 13, cursor: "pointer", opacity: page === 1 ? 0.4 : 1 }}>Prev</button>
@@ -537,7 +590,7 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
   );
 }
 
-function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComplete, initialRegId, onAnalyzeDone, savedUrls: externalUrls, onSaveUrls }) {
+function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComplete, initialRegId, onAnalyzeDone, savedUrls: externalUrls, onSaveUrls, ingestedRegs, onIngest, onUpdateIngested }) {
   const [selected, setSelected] = useState(initialRegId || "");
   const [searchQ, setSearchQ] = useState(""); const [showDropdown, setShowDropdown] = useState(false);
   const [loading, setLoading] = useState(false); const [error, setError] = useState(""); const [result, setResult] = useState(null);
@@ -553,7 +606,9 @@ function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComp
     if (onSaveUrls) onSaveUrls(newList); // persists to JSONBin + localStorage
     else storage.set("delphi_urls", newList);
   };
-  const [newUrl, setNewUrl] = useState(""); const [editingUrl, setEditingUrl] = useState(null); const [editVal, setEditVal] = useState("");
+  const [newUrl, setNewUrl] = useState(""); const [newTitle, setNewTitle] = useState(""); const [editingUrl, setEditingUrl] = useState(null); const [editVal, setEditVal] = useState(""); const [editTitleVal, setEditTitleVal] = useState("");
+  const [collapsedUrls, setCollapsedUrls] = useState({});
+  const toggleCollapse = (id) => setCollapsedUrls(p => ({ ...p, [id]: !p[id] }));
   const [crawling, setCrawling] = useState(null);
   const [urlResults, setUrlResults] = useState(() => {
     // Restore persisted scan results from saved URLs
@@ -576,15 +631,16 @@ function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComp
   const addUrl = () => {
     if (!newUrl.trim()) return;
     const u = newUrl.trim().startsWith("http") ? newUrl.trim() : "https://" + newUrl.trim();
-    saveUrls([...urls, { id: Date.now(), url: u, label: u, added: new Date().toISOString() }]);
-    setNewUrl("");
+    const title = newTitle.trim() || u;
+    saveUrls([...urls, { id: Date.now(), url: u, label: u, title, added: new Date().toISOString() }]);
+    setNewUrl(""); setNewTitle("");
   };
   const deleteUrl = (id) => {
     setUrlResults(prev => { const n = {...prev}; delete n[id]; return n; });
     saveUrls(urls.filter(u => u.id !== id));
   };
-  const startEdit = (u) => { setEditingUrl(u.id); setEditVal(u.label); };
-  const saveEdit = (id) => { saveUrls(urls.map(u => u.id === id ? { ...u, label: editVal } : u)); setEditingUrl(null); };
+  const startEdit = (u) => { setEditingUrl(u.id); setEditVal(u.label || u.url); setEditTitleVal(u.title || u.label || u.url); };
+  const saveEdit = (id) => { saveUrls(urls.map(u => u.id === id ? { ...u, label: editVal, title: editTitleVal } : u)); setEditingUrl(null); };
 
   const crawlUrl = async (urlObj) => {
     setCrawling(urlObj.id);
@@ -919,10 +975,11 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
         <div>
           <div style={card}>
             <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Add Regulatory URL</div>
-            <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Add URLs to regulatory documents or regulatory body websites. DELPHI will crawl and identify regulations to analyze.</div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <input value={newUrl} onChange={e => setNewUrl(e.target.value)} onKeyDown={e => e.key === "Enter" && addUrl()} placeholder="https://eur-lex.europa.eu/..." style={{ ...inp, flex: 1 }} />
-              <button onClick={addUrl} style={{ padding: "11px 20px", background: C.accent, border: "none", color: "#fff", borderRadius: 9, fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>+ Add URL</button>
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Add regulatory websites or specific regulation URLs. DELPHI will deep-crawl the page and linked regulation documents to identify and ingest regulations.</div>
+            <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+              <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Title (e.g. SEC Regulatory Guidance)" style={{ ...inp, width: 280, flexShrink: 0 }} />
+              <input value={newUrl} onChange={e => setNewUrl(e.target.value)} onKeyDown={e => e.key === "Enter" && addUrl()} placeholder="https://..." style={{ ...inp, flex: 1 }} />
+              <button onClick={addUrl} style={{ padding: "11px 20px", background: C.accent, border: "none", color: "#fff", borderRadius: 9, fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>+ Add</button>
             </div>
           </div>
           {urls.length === 0 ? (
@@ -935,19 +992,25 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {editingUrl === u.id ? (
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <input value={editVal} onChange={e => setEditVal(e.target.value)} style={{ ...inp, flex: 1, fontSize: 13 }} />
-                          <button onClick={() => saveEdit(u.id)} style={{ padding: "8px 14px", background: C.green, border: "none", color: "#fff", borderRadius: 7, fontSize: 13, cursor: "pointer" }}>Save</button>
-                          <button onClick={() => setEditingUrl(null)} style={{ padding: "8px 14px", background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 7, fontSize: 13, cursor: "pointer" }}>Cancel</button>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <input value={editTitleVal} onChange={e => setEditTitleVal(e.target.value)} placeholder="Title" style={{ ...inp, fontSize: 13 }} />
+                          <input value={editVal} onChange={e => setEditVal(e.target.value)} placeholder="URL" style={{ ...inp, fontSize: 13 }} />
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button onClick={() => saveEdit(u.id)} style={{ padding: "8px 14px", background: C.green, border: "none", color: "#fff", borderRadius: 7, fontSize: 13, cursor: "pointer" }}>Save</button>
+                            <button onClick={() => setEditingUrl(null)} style={{ padding: "8px 14px", background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 7, fontSize: 13, cursor: "pointer" }}>Cancel</button>
+                          </div>
                         </div>
                       ) : (
                         <>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.label !== u.url ? u.label : ""}</div>
-                          <div style={{ fontSize: 12, color: C.indigo, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: u.label !== u.url ? 2 : 0 }}>{u.url}</div>
-                          <div style={{ display: "flex", gap: 12, marginTop: 4, alignItems: "center" }}>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{u.title || u.label || u.url}</div>
+                          <div style={{ fontSize: 12, color: C.indigo, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 3 }}>{u.url}</div>
+                          <div style={{ display: "flex", gap: 12, marginTop: 4, alignItems: "center", flexWrap: "wrap" }}>
                             <span style={{ fontSize: 11, color: C.muted }}>Added {new Date(u.added).toLocaleDateString()}</span>
                             {u.lastScanned && <span style={{ fontSize: 11, color: C.muted }}>· Scanned {new Date(u.lastScanned).toLocaleDateString()}</span>}
-                            {u.scanResult?.regulations?.length > 0 && <span style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>· {u.scanResult.regulations.length} regulations found</span>}
+                            {u.scanResult?.regulations?.length > 0 && <span style={{ fontSize: 12, color: C.green, fontWeight: 600 }}>· {u.scanResult.regulations.length} regulations found</span>}
+                            {u.scanResult?.regulations?.filter(r => ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase())).length > 0 && (
+                              <span style={{ fontSize: 11, color: C.indigo }}>· {u.scanResult.regulations.filter(r => ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase())).length} ingested</span>
+                            )}
                           </div>
                         </>
                       )}
@@ -969,27 +1032,60 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                         <div style={{ color: C.red, fontSize: 13 }}>Scan error: {res.summary}</div>
                       ) : (
                         <>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-                              {res.type === "regulation" ? "📋 Regulation Document" : "🌐 Regulatory Site"} — {res.regulations?.length || 0} regulation(s) found
-                            </div>
-                            {res.crawledAt && <div style={{ fontSize: 11, color: C.muted }}>Deep crawled {new Date(res.crawledAt).toLocaleString()}</div>}
-                          </div>
-                          {res.regulationLinks?.length > 0 && <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>Followed {res.regulationLinks.length} regulation links during deep crawl.</div>}
-                          {res.siteDescription && <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>{res.siteDescription}</div>}
-                          {res.regulations?.map((r, i) => (
-                            <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", marginBottom: 8 }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 6 }}>
-                                <div>
-                                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{r.name}</div>
-                                  <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference} · {r.jurisdiction} · {r.domain}</div>
-                                </div>
-                                <button onClick={() => analyzeScannedReg(r)} style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, cursor: "pointer", whiteSpace: "nowrap" }}>⚡ Analyze</button>
+                          {/* Summary header with collapse toggle */}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: collapsedUrls[u.id] ? 0 : 10, cursor: "pointer" }} onClick={() => toggleCollapse(u.id)}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <span style={{ fontSize: 14, color: C.muted }}>{collapsedUrls[u.id] ? "▶" : "▼"}</span>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                                {res.type === "regulation" ? "📋 Regulation Document" : "🌐 Regulatory Site"} — {res.regulations?.length || 0} regulation(s) found
                               </div>
-                              <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6 }}>{r.summary}</div>
-                              {r.deadline && <div style={{ fontSize: 12, color: C.amber, marginTop: 6 }}>Deadline: {r.deadline}</div>}
                             </div>
-                          ))}
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              {res.crawledAt && <div style={{ fontSize: 11, color: C.muted }}>Scanned {new Date(res.crawledAt).toLocaleString()}</div>}
+                              {/* Ingest all button */}
+                              {res.regulations?.length > 0 && (
+                                <button onClick={(e) => {
+                                  e.stopPropagation();
+                                  res.regulations.forEach(r => onIngest && onIngest(r, u.url, u.title || u.url));
+                                }} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.greenBorder}`, background: C.greenBg, color: C.green, cursor: "pointer", whiteSpace: "nowrap" }}>
+                                  ↓ Ingest All
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {!collapsedUrls[u.id] && (
+                            <>
+                              {res.regulationLinks?.length > 0 && <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>Deep crawled {res.regulationLinks.length} linked pages.</div>}
+                              {res.siteDescription && <div style={{ fontSize: 13, color: C.muted, marginBottom: 10, lineHeight: 1.5 }}>{res.siteDescription}</div>}
+                              {res.regulations?.map((r, i) => {
+                                const alreadyIngested = ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase());
+                                const alreadyInMaster = allRegs.some(mr => mr.name.toLowerCase() === r.name.toLowerCase() || (r.reference && mr.reference?.toLowerCase() === r.reference.toLowerCase()));
+                                return (
+                                  <div key={i} style={{ background: C.panel, border: `1px solid ${alreadyIngested ? C.greenBorder : C.border}`, borderLeft: `3px solid ${alreadyIngested ? C.green : C.border}`, borderRadius: 9, padding: "12px 14px", marginBottom: 8 }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 6 }}>
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{r.name}</div>
+                                        <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference}{r.jurisdiction ? ` · ${r.jurisdiction}` : ""}{r.domain ? ` · ${r.domain}` : ""}</div>
+                                      </div>
+                                      <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                        {alreadyIngested ? (
+                                          <span style={{ fontSize: 11, color: C.green, fontWeight: 600, padding: "4px 8px", borderRadius: 6, background: C.greenBg, border: `1px solid ${C.greenBorder}` }}>✓ Ingested</span>
+                                        ) : alreadyInMaster ? (
+                                          <span style={{ fontSize: 11, color: C.muted, padding: "4px 8px", borderRadius: 6, background: C.panel2, border: `1px solid ${C.border}` }}>In Master List</span>
+                                        ) : (
+                                          <button onClick={() => onIngest && onIngest(r, u.url, u.title || u.url)} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.greenBorder}`, background: C.greenBg, color: C.green, cursor: "pointer", whiteSpace: "nowrap" }}>↓ Ingest</button>
+                                        )}
+                                        <button onClick={() => analyzeScannedReg(r)} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, cursor: "pointer", whiteSpace: "nowrap" }}>⚡ Analyze</button>
+                                      </div>
+                                    </div>
+                                    <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6 }}>{r.summary}</div>
+                                    {r.deadline && <div style={{ fontSize: 12, color: C.amber, marginTop: 6 }}>⚠ Deadline: {r.deadline}</div>}
+                                    {r.sourceUrl && <div style={{ fontSize: 11, color: C.indigo, marginTop: 4 }}><a href={r.sourceUrl} target="_blank" rel="noreferrer" style={{ color: C.indigo }}>↗ Source document</a></div>}
+                                  </div>
+                                );
+                              })}
+                            </>
+                          )}
                         </>
                       )}
                     </div>
@@ -1226,10 +1322,62 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(() => storage.get("delphi_admin", false));
   const [analyzeRegId, setAnalyzeRegId] = useState(null);
   const [savedUrls, setSavedUrls] = useState(() => storage.get(URLS_KEY, []));
+  const [ingestedRegs, setIngestedRegs] = useState(() => storage.get(INGESTED_KEY, []));
+
   const savePersistentUrls = useCallback((newList) => {
     setSavedUrls(newList);
     storage.set(URLS_KEY, newList);
     jbSet(URLS_KEY, newList);
+  }, []);
+
+  const saveIngestedRegs = useCallback((newList) => {
+    setIngestedRegs(newList);
+    storage.set(INGESTED_KEY, newList);
+    jbSet(INGESTED_KEY, newList);
+  }, []);
+
+  // Ingest a regulation from URL scan - adds to ingested list, no duplicates
+  const ingestRegulation = useCallback((reg, sourceUrl, sourceTitle) => {
+    setIngestedRegs(prev => {
+      // Check for duplicates by reference or name
+      const isDupe = prev.some(r =>
+        (r.reference && reg.reference && r.reference.toLowerCase() === reg.reference.toLowerCase()) ||
+        r.name.toLowerCase() === reg.name.toLowerCase()
+      );
+      if (isDupe) return prev;
+      const newReg = {
+        ...reg,
+        id: `ING-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`,
+        source: sourceUrl,
+        sourceTitle: sourceTitle || sourceUrl,
+        ingestedAt: new Date().toISOString(),
+        hasChanges: false,
+        lastUpdated: new Date().toISOString(),
+        isIngested: true,
+      };
+      const updated = [...prev, newReg];
+      storage.set(INGESTED_KEY, updated);
+      jbSet(INGESTED_KEY, updated);
+      return updated;
+    });
+  }, []);
+
+  const updateIngestedReg = useCallback((id, updates) => {
+    setIngestedRegs(prev => {
+      const updated = prev.map(r => r.id === id ? { ...r, ...updates, lastUpdated: new Date().toISOString(), hasChanges: true } : r);
+      storage.set(INGESTED_KEY, updated);
+      jbSet(INGESTED_KEY, updated);
+      return updated;
+    });
+  }, []);
+
+  const clearChangesFlag = useCallback((id) => {
+    setIngestedRegs(prev => {
+      const updated = prev.map(r => r.id === id ? { ...r, hasChanges: false } : r);
+      storage.set(INGESTED_KEY, updated);
+      jbSet(INGESTED_KEY, updated);
+      return updated;
+    });
   }, []);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
@@ -1258,6 +1406,10 @@ export default function App() {
           const localUrls = storage.get(URLS_KEY, []);
           if (localUrls.length > 0) { jbSet(URLS_KEY, localUrls); setSavedUrls(localUrls); }
         }
+        if (!rec.delphi_ingested || rec.delphi_ingested.length === 0) {
+          const localIngested = storage.get(INGESTED_KEY, []);
+          if (localIngested.length > 0) { jbSet(INGESTED_KEY, localIngested); setIngestedRegs(localIngested); }
+        }
         setLastSync(new Date());
       } catch (e) { console.error("Background sync failed", e); }
     })();
@@ -1271,6 +1423,7 @@ export default function App() {
         if (rec.delphi_scope && Object.keys(rec.delphi_scope).length > 0) setScopeMap(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_scope) ? { ...rec.delphi_scope } : p);
         if (rec.delphi_analyses && Object.keys(rec.delphi_analyses).length > 0) setAnalysisMap(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_analyses) ? { ...rec.delphi_analyses } : p);
         if (rec.delphi_urls?.length > 0) setSavedUrls(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_urls) ? rec.delphi_urls : p);
+        if (rec.delphi_ingested?.length > 0) setIngestedRegs(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_ingested) ? rec.delphi_ingested : p);
         setLastSync(new Date());
       } catch {}
     })();
@@ -1283,6 +1436,7 @@ export default function App() {
       if (rec.delphi_scope && Object.keys(rec.delphi_scope).length > 0) { setScopeMap({ ...rec.delphi_scope }); storage.set(SCOPE_KEY, rec.delphi_scope); }
       if (rec.delphi_analyses && Object.keys(rec.delphi_analyses).length > 0) { setAnalysisMap({ ...rec.delphi_analyses }); storage.set(ANALYSIS_KEY, rec.delphi_analyses); }
       if (rec.delphi_urls?.length > 0) { setSavedUrls(rec.delphi_urls); storage.set(URLS_KEY, rec.delphi_urls); }
+      if (rec.delphi_ingested?.length > 0) { setIngestedRegs(rec.delphi_ingested); storage.set(INGESTED_KEY, rec.delphi_ingested); }
         if (rec.delphi_urls) { setSavedUrls(rec.delphi_urls); storage.set(URLS_KEY, rec.delphi_urls); }
       setLastSync(new Date());
     } catch { }
@@ -1300,7 +1454,14 @@ export default function App() {
 
   if (!authed) return <Login onLogin={login} />;
 
-  const vp = { allRegs, scopeMap, analysisMap };
+  const allRegsWithIngested = useMemo(() => {
+    // Merge ingested regs that don't already exist in master list
+    const masterIds = new Set(allRegs.map(r => r.id));
+    const masterNames = new Set(allRegs.map(r => r.name.toLowerCase()));
+    const newOnes = ingestedRegs.filter(r => !masterIds.has(r.id) && !masterNames.has(r.name.toLowerCase()));
+    return [...allRegs, ...newOnes];
+  }, [allRegs, ingestedRegs]);
+  const vp = { allRegs: allRegsWithIngested, scopeMap, analysisMap };
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
       <style>{G}</style>
@@ -1313,8 +1474,8 @@ export default function App() {
             <button onClick={() => { const v = !isAdmin; setIsAdmin(v); storage.set("delphi_admin", v); }} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${isAdmin ? C.redBorder : C.border}`, background: isAdmin ? C.redBg : "transparent", color: isAdmin ? C.red : C.muted }}>{isAdmin ? "Admin Mode ON" : "Admin Mode"}</button>
           </div>
           {view === "dashboard" && <Dashboard {...vp} />}
-          {view === "inventory" && <Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin} onAnalyzeClick={(id) => { setAnalyzeRegId(id); setView("analyze"); }} />}
-          {view === "analyze" && <Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={() => setAnalyzeRegId(null)} savedUrls={savedUrls} onSaveUrls={savePersistentUrls} />}
+          {view === "inventory" && <Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin} onAnalyzeClick={(id) => { setAnalyzeRegId(id); setView("analyze"); }} ingestedRegs={ingestedRegs} onUpdateIngested={updateIngestedReg} onClearChanges={clearChangesFlag} />}
+          {view === "analyze" && <Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={() => setAnalyzeRegId(null)} savedUrls={savedUrls} onSaveUrls={savePersistentUrls} ingestedRegs={ingestedRegs} onIngest={ingestRegulation} onUpdateIngested={updateIngestedReg} />}
           {view === "controls" && <Controls {...vp} isAdmin={isAdmin} onDeleteControl={onDeleteControl} deletedControlIds={deletedControlIds} />}
           {view === "timeline" && <Timeline {...vp} />}
           {view === "calendar" && <Calendar {...vp} />}
