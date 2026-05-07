@@ -106,11 +106,10 @@ const G = getGlobalStyles("dark"); // default, will be overridden by App
 
 function Login({ onLogin, theme, toggleTheme }) {
   C = theme === "light" ? { ...LIGHT_THEME } : { ...DARK_THEME };
-  // Update HTML background to match theme (prevents flash on reload)
-  useEffect(() => {
-    document.documentElement.style.background = theme === "light" ? "#f0f4f8" : "#070910";
-    document.body.style.background = theme === "light" ? "#f0f4f8" : "#070910";
-  }, [theme]);
+  // Apply background immediately on every render (not just in useEffect)
+  const bg = theme === "light" ? "#f0f4f8" : "#070910";
+  document.documentElement.style.background = bg;
+  document.body.style.background = bg;
   const [pw, setPw] = useState(""); const [err, setErr] = useState("");
   const go = () => pw === "Regscan" ? onLogin() : setErr("Incorrect password.");
   return (
@@ -1728,11 +1727,10 @@ export default function App() {
   const [theme, setTheme] = useState(() => storage.get("delphi_theme", "dark"));
   // Keep C in sync with theme - must happen before render
   C = theme === "light" ? { ...LIGHT_THEME } : { ...DARK_THEME };
-  // Update HTML background to match theme (prevents flash on reload)
-  useEffect(() => {
-    document.documentElement.style.background = theme === "light" ? "#f0f4f8" : "#070910";
-    document.body.style.background = theme === "light" ? "#f0f4f8" : "#070910";
-  }, [theme]);
+  // Apply background synchronously on EVERY render - eliminates all flashes
+  const _bg = theme === "light" ? "#f0f4f8" : "#070910";
+  document.documentElement.style.background = _bg;
+  document.body.style.background = _bg;
   const G = getGlobalStyles(theme);
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
