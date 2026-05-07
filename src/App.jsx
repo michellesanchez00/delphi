@@ -195,21 +195,19 @@ const ISO3_TO_NAME = {
 };
 
 function WorldHeatmap({ allRegs, scopeMap, theme }) {
-  const canvasRef = useRef(null);
-  const containerRef = useRef(null);
-  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
-  const [tooltip, setTooltip] = useState(null);
+  const svgRef = useRef(null);
   const [geoData, setGeoData] = useState(null);
+  const [tooltip, setTooltip] = useState(null);
+  const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 960, h: 500 });
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef(null);
-  const transformRef = useRef(transform);
-  useEffect(() => { transformRef.current = transform; }, [transform]);
+
+  const isDark = theme !== "light";
 
   const countryData = useMemo(() => {
     const map = {};
     allRegs.forEach(r => {
-      const countries = REGION_COUNTRIES[r.region] || [];
-      countries.forEach(c => {
+      (REGION_COUNTRIES[r.region] || []).forEach(c => {
         if (!map[c]) map[c] = { total: 0, inScope: 0 };
         map[c].total++;
         if ((scopeMap[r.id] || "Pending") === "In Scope") map[c].inScope++;
@@ -220,213 +218,215 @@ function WorldHeatmap({ allRegs, scopeMap, theme }) {
 
   const maxCount = useMemo(() => Math.max(1, ...Object.values(countryData).map(d => d.total)), [countryData]);
 
-  // Build iso3 -> data lookup
-  const dataByIso3 = useMemo(() => {
-    const m = {};
-    Object.entries(countryData).forEach(([name, data]) => {
-      // reverse lookup: find iso3 from ISO3_TO_NAME
-      const iso3 = Object.entries(ISO3_TO_NAME).find(([,n]) => n === name)?.[0];
-      if (iso3) m[iso3] = { ...data, name };
-    });
-    return m;
-  }, [countryData]);
+  const ISO3MAP = useMemo(() => ({
+    "840":"USA","276":"DEU","250":"FRA","826":"GBR","392":"JPN","156":"CHN",
+    "356":"IND","036":"AUS","124":"CAN","076":"BRA","710":"ZAF","566":"NGA",
+    "702":"SGP","344":"HKG","784":"ARE","682":"SAU","372":"IRL","528":"NLD",
+    "756":"CHE","380":"ITA","724":"ESP","752":"SWE","578":"NOR","208":"DNK",
+    "056":"BEL","040":"AUT","616":"POL","203":"CZE","484":"MEX","032":"ARG",
+    "152":"CHL","170":"COL","410":"KOR","158":"TWN","360":"IDN","458":"MYS",
+    "764":"THA","608":"PHL","554":"NZL","376":"ISR","792":"TUR","818":"EGY",
+    "404":"KEN","288":"GHA","504":"MAR",
+  }), []);
 
-  // Load world topojson
+  // Load topojson once
   useEffect(() => {
     fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
       .then(r => r.json()).then(setGeoData).catch(() => {});
   }, []);
 
-  const W = 960, H = 500;
+  // Convert topojson to SVG path strings
+  const svgPaths = useMemo(() => {
+    if (!geoData?.objects?.countries?.geometries || !geoData.arcs) return [];
+    const { scale: [kx, ky], translate: [tx, ty] } = geoData.transform;
+    const W = 960, H = 500;
 
-  // Mercator projection
-  const project = useCallback(([lng, lat]) => {
-    const x = (lng + 180) * (W / 360);
-    const latRad = (lat * Math.PI) / 180;
-    const mercN = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
-    const y = H / 2 - (W * mercN) / (2 * Math.PI);
-    return [x, Math.max(0, Math.min(H, y))];
-  }, []);
-
-  const ISO3MAP = {"840":"USA","276":"DEU","250":"FRA","826":"GBR","392":"JPN","156":"CHN",
-    "356":"IND","036":"AUS","124":"CAN","076":"BRA","710":"ZAF","566":"NGA","702":"SGP",
-    "344":"HKG","784":"ARE","682":"SAU","372":"IRL","528":"NLD","756":"CHE","380":"ITA",
-    "724":"ESP","752":"SWE","578":"NOR","208":"DNK","056":"BEL","040":"AUT","616":"POL",
-    "203":"CZE","484":"MEX","032":"ARG","152":"CHL","170":"COL","410":"KOR","158":"TWN",
-    "360":"IDN","458":"MYS","764":"THA","608":"PHL","554":"NZL","376":"ISR","792":"TUR",
-    "818":"EGY","404":"KEN","288":"GHA","504":"MAR"};
-
-  // Draw topojson features on canvas
-  const drawTopoFeatures = useCallback((ctx, topo) => {
-    if (!topo?.objects?.countries?.geometries || !topo.arcs || !topo.transform) return;
-    const kx = topo.transform.scale[0];
-    const ky = topo.transform.scale[1];
-    const tx = topo.transform.translate[0];
-    const ty = topo.transform.translate[1];
-
-    // Pre-decode all arcs into projected [x,y] arrays
-    const projectedArcs = topo.arcs.map(arc => {
+    // Decode all arcs to [x,y] mercator coords
+    const decodedArcs = geoData.arcs.map(arc => {
       let ax = 0, ay = 0;
       return arc.map(([dx, dy]) => {
         ax += dx; ay += dy;
-        return project([ax * kx + tx, ay * ky + ty]);
+        const lon = ax * kx + tx;
+        const lat = ay * ky + ty;
+        // Mercator projection
+        const x = (lon + 180) * (W / 360);
+        const latR = (lat * Math.PI) / 180;
+        const mercN = Math.log(Math.tan(Math.PI / 4 + latR / 2));
+        const y = Math.max(0, Math.min(H, H / 2 - (W * mercN) / (2 * Math.PI)));
+        return [x, y];
       });
     });
 
-    topo.objects.countries.geometries.forEach(geom => {
+    // Build path string from ring
+    const ringToPath = (ring) => {
+      let d = "";
+      ring.forEach(arcIdx => {
+        const pts = arcIdx < 0 ? [...decodedArcs[~arcIdx]].reverse() : decodedArcs[arcIdx];
+        pts.forEach(([x, y], i) => {
+          d += (d === "" || (arcIdx >= 0 && i === 0) ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+        });
+      });
+      return d + "Z";
+    };
+
+    return geoData.objects.countries.geometries.map(geom => {
       const numId = String(geom.id ?? "").padStart(3, "0");
       const iso3 = ISO3MAP[numId] || "";
-      const data = dataByIso3[iso3];
+      const data = countryData[Object.entries(ISO3_TO_NAME).find(([k]) => k === iso3)?.[1]] || null;
+      const intensity = data ? Math.min(1, data.total / maxCount) : 0;
 
-      let fill, stroke;
-      if (data) {
-        const intensity = Math.min(1, data.total / maxCount);
-        const r = Math.round(8 + intensity * 4);
-        const g = Math.round(30 + intensity * 170);
-        const b = Math.round(48 + intensity * 130);
-        fill = `rgb(${r},${g},${b})`;
-        stroke = "rgba(0,200,160,0.25)";
+      let fill;
+      if (isDark) {
+        if (!data) fill = "#111c2e";
+        else {
+          // Teal gradient dark: deep navy → bright teal
+          const r = Math.round(8 + intensity * 4);
+          const g = Math.round(30 + intensity * 178);
+          const b = Math.round(50 + intensity * 138);
+          fill = `rgb(${r},${g},${b})`;
+        }
       } else {
-        fill = theme === "light" ? "#c8d6e5" : "#111c2e";
-        stroke = theme === "light" ? "#b0c2d6" : "#1a2a3e";
+        if (!data) fill = "#cdd9e8";
+        else {
+          // Teal gradient light: pale blue → vivid teal
+          const r = Math.round(180 - intensity * 140);
+          const g = Math.round(210 - intensity * 30);
+          const b = Math.round(220 - intensity * 60);
+          fill = `rgb(${r},${g},${b})`;
+        }
       }
 
-      ctx.fillStyle = fill;
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth = 0.35;
+      const stroke = isDark
+        ? (data ? "rgba(0,220,180,0.18)" : "rgba(255,255,255,0.04)")
+        : (data ? "rgba(0,120,100,0.2)" : "rgba(100,130,160,0.15)");
 
-      const drawRing = (ring) => {
-        let first = true;
-        ring.forEach(arcIdx => {
-          const pts = arcIdx < 0 ? [...projectedArcs[~arcIdx]].reverse() : projectedArcs[arcIdx];
-          pts.forEach(([x, y], i) => {
-            if (first && i === 0) { ctx.moveTo(x, y); first = false; }
-            else ctx.lineTo(x, y);
-          });
-        });
-      };
+      const rings = geom.type === "Polygon" ? geom.arcs
+        : geom.type === "MultiPolygon" ? geom.arcs.flat() : [];
 
-      if (geom.type === "Polygon") {
-        geom.arcs.forEach(ring => { ctx.beginPath(); drawRing(ring); ctx.closePath(); ctx.fill(); ctx.stroke(); });
-      } else if (geom.type === "MultiPolygon") {
-        geom.arcs.forEach(polygon => {
-          polygon.forEach(ring => { ctx.beginPath(); drawRing(ring); ctx.closePath(); ctx.fill(); ctx.stroke(); });
-        });
-      }
+      const d = rings.map(ring => ringToPath(ring)).join(" ");
+      return { d, fill, stroke, iso3, name: ISO3_TO_NAME[iso3] || "", data };
     });
-  }, [geoData, dataByIso3, maxCount, project, theme]);
+  }, [geoData, countryData, maxCount, isDark, ISO3MAP]);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = theme === "light" ? "#dde6f0" : "#0a0f1a";
-    ctx.fillRect(0, 0, W, H);
-    // Grid lines
-    ctx.strokeStyle = theme === "light" ? "#c5d0de" : "#161e2e"; ctx.lineWidth = 0.5;
-    [-60,-30,0,30,60].forEach(lat => {
-      const [,y] = project([0, lat]);
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    });
-    [-150,-120,-90,-60,-30,0,30,60,90,120,150].forEach(lng => {
-      const [x] = project([lng, 0]);
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-    });
-    if (geoData) drawTopoFeatures(ctx, geoData);
-  }, [geoData, drawTopoFeatures, project, theme]);
-
-  const getCountryAtPoint = useCallback((clientX, clientY) => {
-    const el = containerRef.current;
-    if (!el) return null;
-    const rect = el.getBoundingClientRect();
-    const t = transformRef.current;
-    const cx = (clientX - rect.left - t.x) / t.scale;
-    const cy = (clientY - rect.top - t.y) / t.scale;
-    // Find closest country centroid
-    const centroids = {
-      "USA":[37,-95],"DEU":[51,10],"FRA":[46,2],"GBR":[54,-2],"JPN":[36,138],
-      "CHN":[35,105],"IND":[20,77],"AUS":[-25,134],"CAN":[56,-96],"BRA":[-10,-55],
-      "ZAF":[-29,25],"NGA":[9,8],"SGP":[1.3,103.8],"HKG":[22.3,114.2],"ARE":[24,54],
-      "SAU":[24,45],"IRL":[53,-8],"NLD":[52,5],"CHE":[47,8],"ITA":[42,12],
-      "ESP":[40,-4],"SWE":[60,15],"NOR":[60,8],"DNK":[56,10],"BEL":[50,4],
-      "AUT":[47,14],"POL":[52,20],"CZE":[50,15],"MEX":[23,-102],"ARG":[-34,-64],
-      "CHL":[-33,-71],"COL":[4,-72],"KOR":[37,128],"TWN":[24,121],"IDN":[-5,120],
-      "MYS":[3,112],"THA":[15,101],"PHL":[13,122],"NZL":[-41,174],"ISR":[31,35],
-      "TUR":[39,35],"EGY":[27,30],"KEN":[-1,37],"GHA":[8,-2],"MAR":[32,-5],
-    };
-    let closest = null, minDist = 40;
-    Object.entries(centroids).forEach(([iso3, [lat, lng]]) => {
-      const [px, py] = project([lng, lat]);
-      const d = Math.hypot(cx - px, cy - py);
-      if (d < minDist) { minDist = d; closest = iso3; }
-    });
-    return closest;
-  }, [project]);
-
+  // Zoom/pan handlers
   const handleWheel = useCallback((e) => {
     e.preventDefault();
-    setTransform(t => ({ ...t, scale: Math.max(0.6, Math.min(8, t.scale * (e.deltaY < 0 ? 1.2 : 0.85))) }));
-  }, []);
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width * viewBox.w + viewBox.x;
+    const my = (e.clientY - rect.top) / rect.height * viewBox.h + viewBox.y;
+    const factor = e.deltaY < 0 ? 0.8 : 1.25;
+    setViewBox(v => {
+      const nw = Math.max(200, Math.min(960, v.w * factor));
+      const nh = Math.max(104, Math.min(500, v.h * factor));
+      return { x: mx - (mx - v.x) * (nw / v.w), y: my - (my - v.y) * (nh / v.h), w: nw, h: nh };
+    });
+  }, [viewBox]);
+
   const handleMouseDown = useCallback((e) => {
     setDragging(true);
-    dragStart.current = { x: e.clientX - transformRef.current.x, y: e.clientY - transformRef.current.y };
-  }, []);
+    dragStart.current = { x: e.clientX, y: e.clientY, vb: { ...viewBox } };
+  }, [viewBox]);
+
   const handleMouseMove = useCallback((e) => {
-    if (dragging && dragStart.current) setTransform(t => ({ ...t, x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y }));
-    const iso3 = getCountryAtPoint(e.clientX, e.clientY);
-    if (iso3) {
-      const data = dataByIso3[iso3];
-      setTooltip({ name: ISO3_TO_NAME[iso3] || iso3, x: e.clientX, y: e.clientY, data: data || null });
-    } else setTooltip(null);
-  }, [dragging, getCountryAtPoint, dataByIso3]);
+    if (dragging && dragStart.current) {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      const dx = (e.clientX - dragStart.current.x) / rect.width * dragStart.current.vb.w;
+      const dy = (e.clientY - dragStart.current.y) / rect.height * dragStart.current.vb.h;
+      setViewBox({ ...dragStart.current.vb, x: dragStart.current.vb.x - dx, y: dragStart.current.vb.y - dy });
+    }
+  }, [dragging]);
+
   const handleMouseUp = useCallback(() => setDragging(false), []);
   const handleKey = useCallback((e) => {
-    if (e.key === "Escape") setTransform({ x: 0, y: 0, scale: 1 });
-    if (e.key === "+" || e.key === "=") setTransform(t => ({ ...t, scale: Math.min(8, t.scale * 1.3) }));
-    if (e.key === "-") setTransform(t => ({ ...t, scale: Math.max(0.6, t.scale * 0.8) }));
+    if (e.key === "Escape") setViewBox({ x: 0, y: 0, w: 960, h: 500 });
+    if (e.key === "+" || e.key === "=") setViewBox(v => ({ x: v.x + v.w*0.1, y: v.y + v.h*0.1, w: v.w*0.8, h: v.h*0.8 }));
+    if (e.key === "-") setViewBox(v => { const nw=Math.min(960,v.w*1.25); const nh=Math.min(500,v.h*1.25); return { x: v.x-(nw-v.w)/2, y: v.y-(nh-v.h)/2, w: nw, h: nh }; });
   }, []);
 
+  const ocean = isDark ? "#0a0f1a" : "#d6e4f0";
+  const gridColor = isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.06)";
+  const vbStr = `${viewBox.x.toFixed(1)} ${viewBox.y.toFixed(1)} ${viewBox.w.toFixed(1)} ${viewBox.h.toFixed(1)}`;
+
   return (
-    <div style={{ background: theme === "light" ? "#e8eef5" : "#0d1520", border: `2px solid ${C.border}`, borderRadius: 16, overflow: "hidden", marginTop: 20, boxShadow: "0 4px 24px rgba(0,0,0,0.4)" }}>
-      <div style={{ padding: "16px 22px", borderBottom: `1px solid rgba(255,255,255,0.06)`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontWeight: 700, fontSize: 16, color: C.text, letterSpacing: -0.3 }}>Global Regulatory Landscape</div>
-      </div>
-      <div ref={containerRef}
-        style={{ position: "relative", height: 480, overflow: "hidden", cursor: dragging ? "grabbing" : "grab", background: theme === "light" ? "#dde6f0" : "#0a0f1a", userSelect: "none" }}
-        onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp} onMouseLeave={() => { handleMouseUp(); setTooltip(null); }}
-        onKeyDown={handleKey} tabIndex={0}>
-        <canvas ref={canvasRef} width={W} height={H}
-          style={{ position: "absolute", transform: `translate(${transform.x}px,${transform.y}px) scale(${transform.scale})`, transformOrigin: "0 0", transition: dragging ? "none" : "transform 0.08s" }} />
-        {!geoData && <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", color: C.muted, fontSize: 13 }}>Loading map...</div>}
-        {/* Legend - bottom center */}
-        <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", textAlign: "center", pointerEvents: "none" }}>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 6 }}>Regulations Tracked</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>0</span>
-            <div style={{ width: 200, height: 8, borderRadius: 4, background: "linear-gradient(to right, #0a1525, #0a4a3a, #00c896)" }} />
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>40+</span>
-          </div>
-        </div>
-        {/* Zoom controls - bottom right */}
-        <div style={{ position: "absolute", bottom: 16, right: 16, display: "flex", flexDirection: "column", gap: 4 }}>
-          {[{ z: "+", fn: () => setTransform(t => ({ ...t, scale: Math.min(8, t.scale * 1.3) })) },
-            { z: "−", fn: () => setTransform(t => ({ ...t, scale: Math.max(0.6, t.scale * 0.8) })) },
-            { z: "⊡", fn: () => setTransform({ x: 0, y: 0, scale: 1 }) }
-          ].map(({ z, fn }) => (
-            <button key={z} onClick={fn} style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid rgba(255,255,255,0.15)", background: "rgba(10,15,26,0.85)", color: "rgba(255,255,255,0.7)", fontSize: z === "⊡" ? 13 : 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(4px)" }}>{z}</button>
+    <div style={{ background: isDark ? "#0d1520" : "#e8f0f7", border: `2px solid ${C.border}`, borderRadius: 16, overflow: "hidden", marginTop: 20, boxShadow: isDark ? "0 4px 32px rgba(0,0,0,0.5)" : "0 4px 24px rgba(0,0,0,0.1)" }}>
+      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Global Regulatory Landscape</div>
+        <div style={{ display: "flex", gap: 4 }}>
+          {[
+            { label: "+", action: () => setViewBox(v => ({ x: v.x+v.w*0.1, y: v.y+v.h*0.1, w: v.w*0.8, h: v.h*0.8 })) },
+            { label: "−", action: () => setViewBox(v => { const nw=Math.min(960,v.w*1.25); const nh=Math.min(500,v.h*1.25); return { x: v.x-(nw-v.w)/2, y: v.y-(nh-v.h)/2, w: nw, h: nh }; }) },
+            { label: "⊡", action: () => setViewBox({ x: 0, y: 0, w: 960, h: 500 }) },
+          ].map(({ label, action }) => (
+            <button key={label} onClick={action} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)"}`, background: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)", color: C.text, fontSize: label === "⊡" ? 13 : 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>{label}</button>
           ))}
         </div>
       </div>
+
+      <div style={{ position: "relative" }}
+        onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
+        <svg
+          ref={svgRef}
+          viewBox={vbStr}
+          width="100%" height={480}
+          style={{ display: "block", cursor: dragging ? "grabbing" : "grab", background: ocean, userSelect: "none" }}
+          onWheel={handleWheel} onMouseDown={handleMouseDown}
+          onKeyDown={handleKey} tabIndex={0}
+        >
+          {/* Ocean grid lines */}
+          {[-60,-30,0,30,60].map(lat => {
+            const latR = (lat * Math.PI) / 180;
+            const mercN = Math.log(Math.tan(Math.PI/4 + latR/2));
+            const y = 500/2 - (960 * mercN) / (2 * Math.PI);
+            return <line key={lat} x1={0} y1={y} x2={960} y2={y} stroke={gridColor} strokeWidth={0.5} />;
+          })}
+          {[-150,-120,-90,-60,-30,0,30,60,90,120,150].map(lon => {
+            const x = (lon + 180) * (960/360);
+            return <line key={lon} x1={x} y1={0} x2={x} y2={500} stroke={gridColor} strokeWidth={0.5} />;
+          })}
+          {/* Country fills */}
+          {svgPaths.map((p, i) => p.d ? (
+            <path key={i} d={p.d} fill={p.fill} stroke={p.stroke} strokeWidth={0.3}
+              style={{ cursor: p.data ? "pointer" : "default", transition: "fill 0.15s" }}
+              onMouseEnter={e => p.name && setTooltip({ name: p.name, x: e.clientX, y: e.clientY, data: p.data })}
+              onMouseMove={e => setTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
+              onMouseLeave={() => setTooltip(null)}
+            />
+          ) : null)}
+        </svg>
+
+        {/* Loading overlay */}
+        {!geoData && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: ocean, color: C.muted, fontSize: 13 }}>
+            <span className="spin" style={{ display: "inline-block", width: 16, height: 16, border: `2px solid ${C.accent}`, borderTopColor: "transparent", borderRadius: "50%", marginRight: 8 }} />Loading map...
+          </div>
+        )}
+
+        {/* Legend */}
+        <div style={{ position: "absolute", bottom: 14, left: "50%", transform: "translateX(-50%)", textAlign: "center", pointerEvents: "none" }}>
+          <div style={{ fontSize: 10, color: isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 5 }}>Regulations Tracked</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, color: isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)" }}>0</span>
+            <div style={{ width: 180, height: 7, borderRadius: 4, background: isDark ? "linear-gradient(to right,#0a1525,#0a4a3a,#00c896)" : "linear-gradient(to right,#c8d9e8,#40b090,#00a878)" }} />
+            <span style={{ fontSize: 11, color: isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)" }}>40+</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Tooltip */}
       {tooltip && (
-        <div style={{ position: "fixed", left: tooltip.x + 14, top: tooltip.y - 12, background: theme === "light" ? "#ffffff" : "#0f1a2e", border: theme === "light" ? "1px solid rgba(0,150,100,0.3)" : "1px solid rgba(0,200,150,0.2)", borderRadius: 10, padding: "10px 16px", fontSize: 13, pointerEvents: "none", zIndex: 9999, boxShadow: "0 10px 30px rgba(0,0,0,0.7)", minWidth: 170 }}>
-          <div style={{ fontWeight: 700, color: "#fff", marginBottom: 6, fontSize: 14 }}>{tooltip.name}</div>
-          {tooltip.data ? <>
-            <div style={{ color: "rgba(255,255,255,0.5)" }}>Regulations: <span style={{ color: "#00c896", fontWeight: 600 }}>{tooltip.data.total}</span></div>
-            <div style={{ color: "rgba(255,255,255,0.5)" }}>In Scope: <span style={{ color: "#10b981", fontWeight: 600 }}>{tooltip.data.inScope}</span></div>
-            <div style={{ color: "rgba(255,255,255,0.5)" }}>Coverage: <span style={{ color: "#fff", fontWeight: 600 }}>{Math.round(tooltip.data.inScope / tooltip.data.total * 100)}%</span></div>
-          </> : <div style={{ color: "rgba(255,255,255,0.4)", fontStyle: "italic" }}>No regulations mapped</div>}
+        <div style={{ position: "fixed", left: tooltip.x + 14, top: tooltip.y - 12, background: isDark ? "#0f1a2e" : "#ffffff", border: `1px solid ${isDark ? "rgba(0,200,150,0.25)" : "rgba(0,150,100,0.25)"}`, borderRadius: 10, padding: "10px 16px", fontSize: 13, pointerEvents: "none", zIndex: 9999, boxShadow: "0 8px 24px rgba(0,0,0,0.3)", minWidth: 170 }}>
+          <div style={{ fontWeight: 700, color: C.text, marginBottom: 6, fontSize: 14 }}>{tooltip.name}</div>
+          {tooltip.data ? (
+            <>
+              <div style={{ color: C.muted }}>Regulations: <span style={{ color: isDark ? "#00c896" : "#009970", fontWeight: 600 }}>{tooltip.data.total}</span></div>
+              <div style={{ color: C.muted }}>In Scope: <span style={{ color: C.green, fontWeight: 600 }}>{tooltip.data.inScope}</span></div>
+              <div style={{ color: C.muted }}>Coverage: <span style={{ color: C.text, fontWeight: 600 }}>{Math.round(tooltip.data.inScope / tooltip.data.total * 100)}%</span></div>
+            </>
+          ) : <div style={{ color: C.muted, fontStyle: "italic" }}>No regulations mapped</div>}
         </div>
       )}
     </div>
