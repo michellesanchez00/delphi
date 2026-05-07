@@ -697,8 +697,7 @@ regulationLinks should contain up to 10 URLs from the page that likely lead to s
             tools: [{ type: "web_search_20250305", name: "web_search" }],
             messages: [{ role: "user", content: `You are a regulatory compliance analyst. I need you to fetch and analyze each of these regulation URLs and extract full compliance details from each one:
 
-${links.map((l, i) => `${i + 1}. ${l}`).join("
-")}
+${links.map((l, i) => `${i + 1}. ${l}`).join("\\n")}
 
 For each URL, fetch the content and extract the regulation details. Return ONLY this JSON:
 {"regulations":[{"name":"Full regulation name","reference":"Official citation","jurisdiction":"Country/region","domain":"Regulatory domain","summary":"Key obligations 2-3 sentences","effectiveDate":"YYYY-MM-DD or empty","deadline":"YYYY-MM-DD or empty","sourceUrl":"the URL you fetched"}]}
