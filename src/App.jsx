@@ -1382,52 +1382,61 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
 
-  // Instant load from localStorage (no loading screen), then background sync from JSONBin
-  useEffect(() => {
-    (async () => {
-      try {
-        const rec = await jbGet();
-        if (rec.delphi_scope && Object.keys(rec.delphi_scope).length > 0) {
-          setScopeMap({ ...rec.delphi_scope });
-          storage.set(SCOPE_KEY, rec.delphi_scope);
-        }
-        if (rec.delphi_analyses && Object.keys(rec.delphi_analyses).length > 0) {
-          setAnalysisMap({ ...rec.delphi_analyses });
-          storage.set(ANALYSIS_KEY, rec.delphi_analyses);
-        } else {
-          const local = storage.get(ANALYSIS_KEY, {});
-          if (Object.keys(local).length > 0) jbSet("delphi_analyses", local);
-        }
-        if (!rec.delphi_scope) {
-          const local = storage.get(SCOPE_KEY, {});
-          if (Object.keys(local).length > 0) jbSet("delphi_scope", local);
-        }
-        if (!rec.delphi_urls || rec.delphi_urls.length === 0) {
-          const localUrls = storage.get(URLS_KEY, []);
-          if (localUrls.length > 0) { jbSet(URLS_KEY, localUrls); setSavedUrls(localUrls); }
-        }
-        if (!rec.delphi_ingested || rec.delphi_ingested.length === 0) {
-          const localIngested = storage.get(INGESTED_KEY, []);
-          if (localIngested.length > 0) { jbSet(INGESTED_KEY, localIngested); setIngestedRegs(localIngested); }
-        }
-        setLastSync(new Date());
-      } catch (e) { console.error("Background sync failed", e); }
-    })();
+  // Apply remote data to state, only update if actually changed
+  const applyRemoteData = useCallback((rec) => {
+    if (!rec) return;
+    if (rec.delphi_scope && Object.keys(rec.delphi_scope).length > 0) {
+      setScopeMap(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_scope) ? { ...rec.delphi_scope } : p);
+      storage.set(SCOPE_KEY, rec.delphi_scope);
+    }
+    if (rec.delphi_analyses && Object.keys(rec.delphi_analyses).length > 0) {
+      setAnalysisMap(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_analyses) ? { ...rec.delphi_analyses } : p);
+      storage.set(ANALYSIS_KEY, rec.delphi_analyses);
+    }
+    if (rec.delphi_urls?.length > 0) {
+      setSavedUrls(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_urls) ? rec.delphi_urls : p);
+      storage.set(URLS_KEY, rec.delphi_urls);
+    }
+    if (rec.delphi_ingested?.length > 0) {
+      setIngestedRegs(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_ingested) ? rec.delphi_ingested : p);
+      storage.set(INGESTED_KEY, rec.delphi_ingested);
+    }
+    setLastSync(new Date());
   }, []);
 
-  // Sync when switching tabs
+  // On mount: load localStorage immediately (instant), then fetch remote and start polling
   useEffect(() => {
-    (async () => {
+    // Step 1: Show local data instantly (no loading screen)
+    const localScope = storage.get(SCOPE_KEY, {});
+    const localAnalyses = storage.get(ANALYSIS_KEY, {});
+    const localUrls = storage.get(URLS_KEY, []);
+    const localIngested = storage.get(INGESTED_KEY, []);
+    if (Object.keys(localScope).length > 0) setScopeMap(localScope);
+    if (Object.keys(localAnalyses).length > 0) setAnalysisMap(localAnalyses);
+    if (localUrls.length > 0) setSavedUrls(localUrls);
+    if (localIngested.length > 0) setIngestedRegs(localIngested);
+
+    // Step 2: Fetch remote immediately and migrate if needed
+    const initialFetch = async () => {
       try {
         const rec = await jbGet();
-        if (rec.delphi_scope && Object.keys(rec.delphi_scope).length > 0) setScopeMap(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_scope) ? { ...rec.delphi_scope } : p);
-        if (rec.delphi_analyses && Object.keys(rec.delphi_analyses).length > 0) setAnalysisMap(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_analyses) ? { ...rec.delphi_analyses } : p);
-        if (rec.delphi_urls?.length > 0) setSavedUrls(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_urls) ? rec.delphi_urls : p);
-        if (rec.delphi_ingested?.length > 0) setIngestedRegs(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_ingested) ? rec.delphi_ingested : p);
-        setLastSync(new Date());
-      } catch {}
-    })();
-  }, [view]);
+        applyRemoteData(rec);
+        // Migrate local-only data to remote if remote is empty
+        if (!rec.delphi_scope && Object.keys(localScope).length > 0) jbSet(SCOPE_KEY, localScope);
+        if (!rec.delphi_analyses && Object.keys(localAnalyses).length > 0) jbSet(ANALYSIS_KEY, localAnalyses);
+        if (!rec.delphi_urls?.length && localUrls.length > 0) jbSet(URLS_KEY, localUrls);
+        if (!rec.delphi_ingested?.length && localIngested.length > 0) jbSet(INGESTED_KEY, localIngested);
+      } catch (e) { console.error("Initial sync failed", e); }
+    };
+    initialFetch();
+
+    // Step 3: Poll every 15 seconds for cross-device live sync
+    const interval = setInterval(async () => {
+      try { applyRemoteData(await jbGet()); } catch {}
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [applyRemoteData]);
 
   const syncNow = async () => {
     setSyncing(true);
@@ -1469,8 +1478,11 @@ export default function App() {
       <main style={{ marginLeft: 248, minHeight: "100vh" }}>
         <div style={{ maxWidth: 1440, margin: "0 auto", padding: "28px 36px" }}>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 22, alignItems: "center" }}>
-            {lastSync && <span style={{ fontSize: 12, color: C.muted }}>Synced {lastSync.toLocaleTimeString()}</span>}
-            <button onClick={syncNow} disabled={syncing} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: "transparent", color: syncing ? C.muted : C.accent, opacity: syncing ? 0.6 : 1 }}>{syncing ? "Syncing..." : "↻ Sync"}</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.green, display: "inline-block", boxShadow: `0 0 6px ${C.green}` }} title="Auto-syncing every 15 seconds" />
+              {lastSync && <span style={{ fontSize: 12, color: C.muted }}>Synced {lastSync.toLocaleTimeString()}</span>}
+            </div>
+            <button onClick={syncNow} disabled={syncing} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: "transparent", color: syncing ? C.muted : C.accent, opacity: syncing ? 0.6 : 1 }}>{syncing ? "Syncing..." : "↻ Sync Now"}</button>
             <button onClick={() => { const v = !isAdmin; setIsAdmin(v); storage.set("delphi_admin", v); }} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${isAdmin ? C.redBorder : C.border}`, background: isAdmin ? C.redBg : "transparent", color: isAdmin ? C.red : C.muted }}>{isAdmin ? "Admin Mode ON" : "Admin Mode"}</button>
           </div>
           {view === "dashboard" && <Dashboard {...vp} />}
