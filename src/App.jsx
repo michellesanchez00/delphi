@@ -371,43 +371,45 @@ function WorldHeatmap({ allRegs, scopeMap }) {
   }, []);
 
   return (
-    <div style={{ background: "#0d1520", border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginTop: 20 }}>
-      <div style={{ padding: "18px 22px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div style={{ background: "#0d1520", border: `2px solid ${C.border}`, borderRadius: 16, overflow: "hidden", marginTop: 20, boxShadow: "0 4px 24px rgba(0,0,0,0.4)" }}>
+      <div style={{ padding: "16px 22px", borderBottom: `1px solid rgba(255,255,255,0.06)`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ fontWeight: 700, fontSize: 16, color: C.text, letterSpacing: -0.3 }}>Global Regulatory Landscape</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {[{z:"+",fn:()=>setTransform(t=>({...t,scale:Math.min(8,t.scale*1.3)}))},
-            {z:"−",fn:()=>setTransform(t=>({...t,scale:Math.max(0.6,t.scale*0.8)}))},
-            {z:"⊡",fn:()=>setTransform({x:0,y:0,scale:1})}
-          ].map(({z,fn})=>(
-            <button key={z} onClick={fn} style={{width:36,height:36,borderRadius:9,border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.08)",color:C.text,fontSize:z==="⊡"?14:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>{z}</button>
+      </div>
+      <div ref={containerRef}
+        style={{ position: "relative", height: 480, overflow: "hidden", cursor: dragging ? "grabbing" : "grab", background: "#0a0f1a", userSelect: "none" }}
+        onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp} onMouseLeave={() => { handleMouseUp(); setTooltip(null); }}
+        onKeyDown={handleKey} tabIndex={0}>
+        <canvas ref={canvasRef} width={W} height={H}
+          style={{ position: "absolute", transform: `translate(${transform.x}px,${transform.y}px) scale(${transform.scale})`, transformOrigin: "0 0", transition: dragging ? "none" : "transform 0.08s" }} />
+        {!geoData && <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", color: C.muted, fontSize: 13 }}>Loading map...</div>}
+        {/* Legend - bottom center */}
+        <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", textAlign: "center", pointerEvents: "none" }}>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 6 }}>Regulations Tracked</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>0</span>
+            <div style={{ width: 200, height: 8, borderRadius: 4, background: "linear-gradient(to right, #0a1525, #0a4a3a, #00c896)" }} />
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>40+</span>
+          </div>
+        </div>
+        {/* Zoom controls - bottom right */}
+        <div style={{ position: "absolute", bottom: 16, right: 16, display: "flex", flexDirection: "column", gap: 4 }}>
+          {[{ z: "+", fn: () => setTransform(t => ({ ...t, scale: Math.min(8, t.scale * 1.3) })) },
+            { z: "−", fn: () => setTransform(t => ({ ...t, scale: Math.max(0.6, t.scale * 0.8) })) },
+            { z: "⊡", fn: () => setTransform({ x: 0, y: 0, scale: 1 }) }
+          ].map(({ z, fn }) => (
+            <button key={z} onClick={fn} style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid rgba(255,255,255,0.15)", background: "rgba(10,15,26,0.85)", color: "rgba(255,255,255,0.7)", fontSize: z === "⊡" ? 13 : 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(4px)" }}>{z}</button>
           ))}
         </div>
       </div>
-      <div ref={containerRef} style={{position:"relative",height:480,overflow:"hidden",cursor:dragging?"grabbing":"grab",touchAction:"pan-y",background:"#0a0f1a"}}
-        onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp} onMouseLeave={()=>{handleMouseUp();setTooltip(null);}}
-        onKeyDown={handleKey} tabIndex={0}>
-        <canvas ref={canvasRef} width={W} height={H}
-          style={{position:"absolute",transform:`translate(${transform.x}px,${transform.y}px) scale(${transform.scale})`,transformOrigin:"0 0",transition:dragging?"none":"transform 0.08s"}}/>
-        {!geoData && <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:C.muted,fontSize:13}}>Loading map...</div>}
-        <div style={{position:"absolute",bottom:20,left:"50%",transform:"translateX(-50%)",textAlign:"center"}}>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.35)",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6}}>Regulations Tracked</div>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <span style={{fontSize:11,color:"rgba(255,255,255,0.35)"}}>0</span>
-            <div style={{width:200,height:8,borderRadius:4,background:"linear-gradient(to right, #0a1525, #0a4a3a, #00c896)"}}/>
-            <span style={{fontSize:11,color:"rgba(255,255,255,0.35)"}}>40+</span>
-          </div>
-        </div>
-        <div style={{position:"absolute",top:14,left:14,fontSize:11,color:"rgba(255,255,255,0.3)"}}>+/− zoom · drag to pan · Esc reset</div>
-      </div>
       {tooltip && (
-        <div style={{position:"fixed",left:tooltip.x+14,top:tooltip.y-12,background:"#0f1a2e",border:"1px solid rgba(0,200,150,0.2)",borderRadius:10,padding:"10px 16px",fontSize:13,pointerEvents:"none",zIndex:9999,boxShadow:"0 10px 30px rgba(0,0,0,0.7)",minWidth:170}}>
-          <div style={{fontWeight:700,color:"#fff",marginBottom:6,fontSize:14}}>{tooltip.name}</div>
+        <div style={{ position: "fixed", left: tooltip.x + 14, top: tooltip.y - 12, background: "#0f1a2e", border: "1px solid rgba(0,200,150,0.2)", borderRadius: 10, padding: "10px 16px", fontSize: 13, pointerEvents: "none", zIndex: 9999, boxShadow: "0 10px 30px rgba(0,0,0,0.7)", minWidth: 170 }}>
+          <div style={{ fontWeight: 700, color: "#fff", marginBottom: 6, fontSize: 14 }}>{tooltip.name}</div>
           {tooltip.data ? <>
-            <div style={{color:"rgba(255,255,255,0.5)"}}>Regulations: <span style={{color:"#00c896",fontWeight:600}}>{tooltip.data.total}</span></div>
-            <div style={{color:"rgba(255,255,255,0.5)"}}>In Scope: <span style={{color:"#10b981",fontWeight:600}}>{tooltip.data.inScope}</span></div>
-            <div style={{color:"rgba(255,255,255,0.5)"}}>Coverage: <span style={{color:"#fff",fontWeight:600}}>{Math.round(tooltip.data.inScope/tooltip.data.total*100)}%</span></div>
-          </> : <div style={{color:"rgba(255,255,255,0.4)",fontStyle:"italic"}}>No regulations mapped</div>}
+            <div style={{ color: "rgba(255,255,255,0.5)" }}>Regulations: <span style={{ color: "#00c896", fontWeight: 600 }}>{tooltip.data.total}</span></div>
+            <div style={{ color: "rgba(255,255,255,0.5)" }}>In Scope: <span style={{ color: "#10b981", fontWeight: 600 }}>{tooltip.data.inScope}</span></div>
+            <div style={{ color: "rgba(255,255,255,0.5)" }}>Coverage: <span style={{ color: "#fff", fontWeight: 600 }}>{Math.round(tooltip.data.inScope / tooltip.data.total * 100)}%</span></div>
+          </> : <div style={{ color: "rgba(255,255,255,0.4)", fontStyle: "italic" }}>No regulations mapped</div>}
         </div>
       )}
     </div>
@@ -595,7 +597,10 @@ function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComp
   const [searchQ, setSearchQ] = useState(""); const [showDropdown, setShowDropdown] = useState(false);
   const [loading, setLoading] = useState(false); const [error, setError] = useState(""); const [result, setResult] = useState(null);
   // File upload state
-  const [uploadedFile, setUploadedFile] = useState(null); const [fileContent, setFileContent] = useState("");
+  const [uploadedFile, setUploadedFile] = useState(null);
+  const [fileContent, setFileContent] = useState("");
+  const [fileResult, setFileResult] = useState(null); // current file's analysis result
+  const [viewingFileResult, setViewingFileResult] = useState(null); // for "View Analysis" navigation
   // URL management state - always backed by remote store via onSaveUrls
   const [localUrls, setLocalUrls] = useState(externalUrls || storage.get("delphi_urls", []));
   // Keep local copy in sync when external changes (e.g. after remote sync)
@@ -618,9 +623,17 @@ function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComp
     });
     return init;
   });
-  const [activeTab, setActiveTab] = useState("regulation"); // regulation | file | url
+  const [activeTab, setActiveTab] = useState("regulation"); // regulation | file | url | bulk
+  const [bulkSelected, setBulkSelected] = useState(new Set());
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0, current: "", errors: [] });
+  const [bulkFilter, setBulkFilter] = useState("All"); // All | In Scope | Pending | Not Analyzed
 
   const reg = allRegs.find(r => r.id === selected);
+  // When viewing a file/url result on regulation tab, show that result
+  useEffect(() => {
+    if (activeTab !== "regulation") setViewingFileResult(null);
+  }, [activeTab]);
   useEffect(() => { if (initialRegId) { setSelected(initialRegId); setActiveTab("regulation"); if (onAnalyzeDone) onAnalyzeDone(); } }, [initialRegId]);
   useEffect(() => { setResult(selected && analysisMap[selected] ? analysisMap[selected] : null); }, [selected, analysisMap]);
   const filteredRegs = useMemo(() => { if (!searchQ) return allRegs; const q = searchQ.toLowerCase(); return allRegs.filter(r => r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.id.toLowerCase().includes(q)); }, [allRegs, searchQ]);
@@ -746,7 +759,7 @@ Include ALL regulations found across all URLs. Deduplicate if the same regulatio
 
 
   // Run full analysis on a regulation found via URL scan
-  const analyzeScannedReg = async (scannedReg) => {
+  const analyzeScannedReg = async (scannedReg, regKey) => {
     setActiveTab("regulation");
     setResult(null);
     setLoading(true); setError("");
@@ -780,7 +793,25 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
       let parsed;
       try { parsed = JSON.parse(text); }
       catch { const m = text.match(/\{[\s\S]*\}/); try { parsed = JSON.parse(m?.[0]); } catch { parsed = { executiveSummary: "Parse error — retry.", businessRisk: "Medium", riskRationale: "", keyObligations: [], newControls: [], gapAnalysis: "", deadlineRisk: "", recommendedActions: [] }; } }
-      setResult(parsed);
+      // Store in analysisMap if we have a regKey
+      if (regKey) onAnalysisComplete(regKey, parsed);
+      setActiveTab("url"); // stay on URL tab to show result
+      setResult(null); // clear main result so we don't show it below
+      // Update URL results to show analysis for this reg
+      setUrlResults(prev => {
+        const updated = { ...prev };
+        // Find which URL this reg belongs to and mark it analyzed
+        Object.keys(updated).forEach(uid => {
+          const res = updated[uid];
+          if (res?.regulations) {
+            updated[uid] = { ...res, regulations: res.regulations.map(r => {
+              const rk = "URL:" + (r.reference || r.name).replace(/[^a-zA-Z0-9]/g, "_").substring(0, 40);
+              return rk === regKey ? { ...r, _analyzed: true } : r;
+            })};
+          }
+        });
+        return updated;
+      });
     } catch(e) { setError(e.message); }
     finally { setLoading(false); }
   };
@@ -812,7 +843,54 @@ Return this exact JSON (string values max 25 words, reasons max 10 words):
 Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allControls=ALL controls for this regulation (isNew:false if already mapped, isNew:true if new gap). marshScope must have all 12 entities. Output ONLY raw JSON.`;
   };
 
-  const analyze = async () => {
+  const runBulkAnalysis = async () => {
+    if (bulkSelected.size === 0 || bulkRunning) return;
+    setBulkRunning(true);
+    const ids = [...bulkSelected];
+    setBulkProgress({ done: 0, total: ids.length, current: "", errors: [] });
+    for (let i = 0; i < ids.length; i++) {
+      const regId = ids[i];
+      const reg = allRegs.find(r => r.id === regId);
+      if (!reg) continue;
+      setBulkProgress(p => ({ ...p, current: reg.name, done: i }));
+      try {
+        const thisRegControls = CONTROLS_LIBRARY.filter(c => c.regulations.includes(regId));
+        const otherControls = CONTROLS_LIBRARY.filter(c => !c.regulations.includes(regId) && c.regulations.some(rId => inScopeIds.has(rId)));
+        const prompt = `You are a regulatory compliance expert. Respond with ONLY a valid JSON object - no markdown, no backticks, no text outside JSON. No newlines inside string values.
+
+Regulation: ${reg.name} (${reg.reference}) | ${reg.region} | ${reg.domain} | Effective: ${reg.effectiveDate} | Deadline: ${reg.deadline||"N/A"}
+Summary: ${reg.summary}
+Marsh entities in scope: ${(reg.marshEntities||[]).join(", ")||"Unknown"}
+
+Controls ALREADY MAPPED to this regulation: ${thisRegControls.map(c=>c.title).join(", ")||"None"}
+Controls from other in-scope regulations: ${otherControls.map(c=>c.title).join(", ")||"None"}
+
+Return this exact JSON (string values max 25 words, reasons max 10 words):
+{"executiveSummary":"2 sentence summary","businessRisk":"High","riskRationale":"one sentence","keyObligations":["obligation 1","obligation 2","obligation 3"],"marshScope":[{"entity":"Marsh (Parent)","inScope":true,"reason":"short reason"},{"entity":"Marsh Risk","inScope":true,"reason":"short reason"},{"entity":"Guy Carpenter / Marsh Re","inScope":false,"reason":"short reason"},{"entity":"Mercer","inScope":false,"reason":"short reason"},{"entity":"Oliver Wyman","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Limited (UK)","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Ireland","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Asset Management LLC","inScope":false,"reason":"short reason"},{"entity":"Victor Insurance","inScope":false,"reason":"short reason"},{"entity":"McGriff Insurance Services","inScope":false,"reason":"short reason"}],"allControls":[{"title":"name","description":"what to do","priority":"Immediate","isNew":true}],"gapAnalysis":"one paragraph","deadlineRisk":"one sentence or empty string","recommendedActions":["action 1","action 2","action 3"]}
+
+Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allControls=ALL controls needed. marshScope must have all 12 entities. Output ONLY raw JSON.`;
+
+        const res = await fetch(PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 4000, messages: [{ role: "user", content: prompt }] }) });
+        const data = await res.json();
+        const raw = data.content?.[0]?.text || "";
+        const text = raw.replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/,"").trim();
+        let parsed;
+        try { parsed = JSON.parse(text); }
+        catch { const m = text.match(/\{[\s\S]*\}/); try { parsed = JSON.parse(m?.[0]); } catch { parsed = null; } }
+        if (parsed) onAnalysisComplete(regId, parsed);
+        else setBulkProgress(p => ({ ...p, errors: [...p.errors, reg.name] }));
+      } catch (e) {
+        setBulkProgress(p => ({ ...p, errors: [...p.errors, reg.name] }));
+      }
+      setBulkProgress(p => ({ ...p, done: i + 1 }));
+      // Small delay between requests to avoid rate limiting
+      if (i < ids.length - 1) await new Promise(r => setTimeout(r, 800));
+    }
+    setBulkProgress(p => ({ ...p, current: "", done: ids.length }));
+    setBulkRunning(false);
+  };
+
+    const analyze = async () => {
     setLoading(true); setError(""); setResult(null);
     try {
       let messages;
@@ -822,16 +900,21 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
         const prompt = buildPrompt(regData, "See attached document");
         if (isPdf) {
           const base64 = fileContent.split(",")[1];
-          messages = [{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }, { type: "text", text: prompt }] }];
+          // Shorter prompt for PDF - the document content is in the file itself
+          const pdfPrompt = prompt.replace("See attached document", "the attached PDF document");
+          messages = [{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }, { type: "text", text: pdfPrompt }] }];
         } else {
-          messages = [{ role: "user", content: `${prompt}\n\nDocument content:\n${fileContent.substring(0, 8000)}` }];
+          // For text files: truncate content to leave room for response
+          const truncated = fileContent.substring(0, 4000);
+          const docPrompt = prompt.replace("See attached document", `Document excerpt (first 4000 chars):\n${truncated}`);
+          messages = [{ role: "user", content: docPrompt }];
         }
       } else if (reg) {
         const prompt = buildPrompt(reg);
         messages = [{ role: "user", content: prompt }];
       } else { setError("Please select a regulation or upload a file."); setLoading(false); return; }
 
-      const res = await fetch(PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 4000, messages }) });
+      const res = await fetch(PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 8000, messages }) });
       if (!res.ok) throw new Error(`API error ${res.status}`);
       const data = await res.json();
       const raw = data.content?.[0]?.text || "";
@@ -840,15 +923,41 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
       try { parsed = JSON.parse(text); }
       catch {
         try {
-          const m = text.match(/\{[\s\S]*\}/);
-          if (!m) throw new Error("No JSON");
-          let j = m[0].replace(/,\s*([}\]])/g, '$1').replace(/([^\\])\n/g, '$1 ');
-          parsed = JSON.parse(j);
+          let jsonStr = text;
+          const start = jsonStr.indexOf("{");
+          if (start === -1) throw new Error("No JSON");
+          jsonStr = jsonStr.substring(start);
+          // Fix trailing commas
+          jsonStr = jsonStr.replace(/,\s*([}\]])/g, "$1");
+          // Fix unescaped newlines inside strings
+          jsonStr = jsonStr.replace(/([^\\])\n/g, "$1 ");
+          // If truncated, close open structures
+          const opens = (jsonStr.match(/\{/g)||[]).length - (jsonStr.match(/\}/g)||[]).length;
+          const openArr = (jsonStr.match(/\[/g)||[]).length - (jsonStr.match(/\]/g)||[]).length;
+          if (opens > 0 || openArr > 0) {
+            // Close any dangling string value
+            const lastChar = jsonStr.trimEnd().slice(-1);
+            if (lastChar !== '"' && lastChar !== ']' && lastChar !== '}') jsonStr += '"';
+            for (let i = 0; i < openArr; i++) jsonStr += "]";
+            for (let i = 0; i < opens; i++) jsonStr += "}";
+          }
+          parsed = JSON.parse(jsonStr);
         } catch {
-          parsed = { executiveSummary: "Parse error — please retry.", businessRisk: "Medium", riskRationale: "See raw output.", keyObligations: [text.substring(0, 400)], newControls: [], gapAnalysis: "Re-run analysis.", deadlineRisk: "", recommendedActions: ["Retry analysis"] };
+          parsed = {
+            executiveSummary: "The document was analyzed but the response was too large to fully parse. The document may be too long — try uploading a shorter excerpt.",
+            businessRisk: "Medium", riskRationale: "Response was truncated.",
+            keyObligations: text.length > 100 ? [text.substring(0, 600) + "..."] : ["No content returned"],
+            allControls: [], gapAnalysis: "Re-run with a shorter document or paste key sections.", deadlineRisk: "", recommendedActions: ["Upload a shorter excerpt of the regulation (first 5 pages)"]
+          };
         }
       }
       if (selected) onAnalysisComplete(selected, parsed);
+      else if (activeTab === "file" && uploadedFile) {
+        // Store file analysis keyed by a stable file key
+        const fileKey = "FILE:" + uploadedFile.name.replace(/[^a-zA-Z0-9]/g, "_");
+        onAnalysisComplete(fileKey, parsed);
+        setFileResult(parsed);
+      }
       setResult(parsed);
     } catch (e) { setError(e.message || "Analysis failed"); }
     finally { setLoading(false); }
@@ -873,6 +982,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
       {/* Tab switcher */}
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
         <TabBtn id="regulation" label="Select Regulation" icon="≡" />
+        <TabBtn id="bulk" label={`Bulk Analyze${bulkSelected.size > 0 ? ` (${bulkSelected.size})` : ""}`} icon="⚡" />
         <TabBtn id="file" label="Upload File" icon="↑" />
         <TabBtn id="url" label="Manage URLs" icon="🔗" />
       </div>
@@ -938,39 +1048,162 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
       )}
 
       {/* File Upload tab */}
-      {activeTab === "file" && (
-        <div style={card}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Upload Regulation Document</div>
-          <div style={{ fontSize: 13, color: C.muted, marginBottom: 18 }}>Upload a PDF or text file containing a regulation. DELPHI will extract and analyze its compliance obligations.</div>
-          <label style={{ display: "block", cursor: "pointer" }}>
-            <div style={{ border: `2px dashed ${uploadedFile ? C.indigoBorder : C.border}`, borderRadius: 12, padding: "32px 24px", textAlign: "center", background: uploadedFile ? C.indigoBg : C.panel2, transition: "all 0.2s" }}>
-              {uploadedFile ? (
-                <div>
-                  <div style={{ fontSize: 28, marginBottom: 8 }}>📄</div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: C.indigo }}>{uploadedFile.name}</div>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{(uploadedFile.size / 1024).toFixed(1)} KB · {uploadedFile.type || "text"}</div>
-                  <div style={{ fontSize: 12, color: C.green, marginTop: 6 }}>✓ Ready to analyze</div>
+      {activeTab === "file" && (() => {
+        const fileKey = uploadedFile ? "FILE:" + uploadedFile.name.replace(/[^a-zA-Z0-9]/g, "_") : null;
+        const existingAnalysis = fileKey ? analysisMap[fileKey] : null;
+        const fileScope = fileKey ? (scopeMap[fileKey] || "Pending") : "Pending";
+        return (
+          <div>
+            <div style={card}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 6 }}>Upload Regulation Document</div>
+              <div style={{ fontSize: 13, color: C.muted, marginBottom: 18 }}>Upload a PDF or text file containing a regulation. DELPHI will extract and analyze its compliance obligations.</div>
+              <label style={{ display: "block", cursor: "pointer" }}>
+                <div style={{ border: `2px dashed ${uploadedFile ? C.indigoBorder : C.border}`, borderRadius: 12, padding: "32px 24px", textAlign: "center", background: uploadedFile ? C.indigoBg : C.panel2, transition: "all 0.2s" }}>
+                  {uploadedFile ? (
+                    <div>
+                      <div style={{ fontSize: 28, marginBottom: 8 }}>📄</div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: C.indigo }}>{uploadedFile.name}</div>
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{(uploadedFile.size / 1024).toFixed(1)} KB · {uploadedFile.type || "text"}</div>
+                      {existingAnalysis
+                        ? <div style={{ fontSize: 12, color: C.green, marginTop: 6 }}>✓ Previously analyzed</div>
+                        : <div style={{ fontSize: 12, color: C.green, marginTop: 6 }}>✓ Ready to analyze</div>}
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: 32, marginBottom: 10 }}>↑</div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Drop a file or click to browse</div>
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>PDF, TXT, DOCX supported</div>
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div>
-                  <div style={{ fontSize: 32, marginBottom: 10 }}>↑</div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Drop a file or click to browse</div>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>PDF, TXT, DOCX supported</div>
+                <input type="file" accept=".pdf,.txt,.doc,.docx" onChange={handleFile} style={{ display: "none" }} />
+              </label>
+              {uploadedFile && (
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
+                  <button onClick={() => { setUploadedFile(null); setFileContent(""); setResult(null); setFileResult(null); }} style={{ fontSize: 12, color: C.muted, background: "transparent", border: "none", cursor: "pointer" }}>× Remove</button>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+                    <span style={{ fontSize: 13, color: C.muted }}>Scope:</span>
+                    <select value={fileScope} onChange={e => fileKey && onScopeChange(fileKey, e.target.value)}
+                      style={{ background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 7, padding: "5px 10px", fontSize: 13, cursor: "pointer", outline: "none" }}>
+                      <option>Pending</option><option>In Scope</option><option>Out of Scope</option>
+                    </select>
+                    <Badge text={fileScope} style={scopeStyle(fileScope)} />
+                  </div>
                 </div>
               )}
+              <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+                {existingAnalysis ? (
+                  <button onClick={() => { setResult(existingAnalysis); setViewingFileResult(uploadedFile?.name); }}
+                    style={{ display: "flex", alignItems: "center", gap: 8, background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, color: C.indigo, fontWeight: 700, padding: "11px 24px", borderRadius: 9, fontSize: 14, cursor: "pointer" }}>
+                    👁 View Analysis
+                  </button>
+                ) : null}
+                <button onClick={analyze} disabled={!uploadedFile || loading}
+                  style={{ display: "flex", alignItems: "center", gap: 8, background: C.accent, border: "none", color: "#fff", fontWeight: 700, padding: "11px 24px", borderRadius: 9, fontSize: 15, cursor: uploadedFile && !loading ? "pointer" : "not-allowed", opacity: !uploadedFile || loading ? 0.5 : 1 }}>
+                  {loading ? <><span className="spin" style={{ display: "inline-block", width: 14, height: 14, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%" }} />Analyzing...</> : existingAnalysis ? "↻ Re-analyze" : "⚡ Analyze Document"}
+                </button>
+              </div>
+              {error && <div style={{ marginTop: 12, background: C.redBg, border: `1px solid ${C.redBorder}`, color: C.red, borderRadius: 9, padding: 14, fontSize: 14 }}>{error}</div>}
             </div>
-            <input type="file" accept=".pdf,.txt,.doc,.docx" onChange={handleFile} style={{ display: "none" }} />
-          </label>
-          {uploadedFile && <button onClick={() => { setUploadedFile(null); setFileContent(""); }} style={{ marginTop: 10, fontSize: 12, color: C.muted, background: "transparent", border: "none", cursor: "pointer" }}>× Remove file</button>}
-          <button onClick={analyze} disabled={!uploadedFile || loading} style={{ marginTop: 18, display: "flex", alignItems: "center", gap: 8, background: C.accent, border: "none", color: "#fff", fontWeight: 700, padding: "11px 24px", borderRadius: 9, fontSize: 15, cursor: uploadedFile && !loading ? "pointer" : "not-allowed", opacity: !uploadedFile || loading ? 0.5 : 1 }}>
-            {loading ? <><span className="spin" style={{ display: "inline-block", width: 14, height: 14, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%" }} />Analyzing...</> : "⚡ Analyze Document"}
-          </button>
-          {error && <div style={{ marginTop: 12, background: C.redBg, border: `1px solid ${C.redBorder}`, color: C.red, borderRadius: 9, padding: 14, fontSize: 14 }}>{error}</div>}
+          </div>
+        );
+      })()}
+
+      {/* URL Management tab */}
+      {activeTab === "bulk" && (
+        <div>
+          {/* Bulk Analysis Header */}
+          <div style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>Bulk Regulation Analysis</div>
+              <div style={{ fontSize: 13, color: C.muted }}>Select multiple regulations and run AI analysis on all of them. Analysis runs sequentially to avoid rate limits.</div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <select value={bulkFilter} onChange={e => setBulkFilter(e.target.value)} style={{ background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", outline: "none" }}>
+                <option value="All">All Regulations</option>
+                <option value="In Scope">In Scope Only</option>
+                <option value="Pending">Pending Scope</option>
+                <option value="Not Analyzed">Not Yet Analyzed</option>
+                <option value="Analyzed">Already Analyzed</option>
+              </select>
+              <button onClick={() => {
+                const filtered = allRegs.filter(r => {
+                  if (bulkFilter === "In Scope") return (scopeMap[r.id]||"Pending") === "In Scope";
+                  if (bulkFilter === "Pending") return (scopeMap[r.id]||"Pending") === "Pending";
+                  if (bulkFilter === "Not Analyzed") return !analysisMap[r.id];
+                  if (bulkFilter === "Analyzed") return !!analysisMap[r.id];
+                  return true;
+                });
+                setBulkSelected(new Set(filtered.map(r => r.id)));
+              }} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, fontSize: 13, cursor: "pointer" }}>Select All</button>
+              <button onClick={() => setBulkSelected(new Set())} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panel2, color: C.muted, fontSize: 13, cursor: "pointer" }}>Clear</button>
+              <button onClick={runBulkAnalysis} disabled={bulkSelected.size === 0 || bulkRunning}
+                style={{ padding: "9px 20px", background: bulkSelected.size > 0 && !bulkRunning ? C.accent : C.panel2, border: "none", color: bulkSelected.size > 0 && !bulkRunning ? "#fff" : C.muted, borderRadius: 9, fontSize: 14, fontWeight: 700, cursor: bulkSelected.size > 0 && !bulkRunning ? "pointer" : "not-allowed", whiteSpace: "nowrap" }}>
+                {bulkRunning ? `Analyzing ${bulkProgress.done}/${bulkProgress.total}...` : `⚡ Analyze ${bulkSelected.size > 0 ? `(${bulkSelected.size})` : ""}`}
+              </button>
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          {(bulkRunning || bulkProgress.done > 0) && (
+            <div style={{ ...card, marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
+                  {bulkRunning ? `Analyzing: ${bulkProgress.current}` : bulkProgress.errors.length === 0 ? `✓ Complete — ${bulkProgress.done} regulations analyzed` : `Complete — ${bulkProgress.done - bulkProgress.errors.length}/${bulkProgress.done} succeeded`}
+                </div>
+                <div style={{ fontSize: 13, color: C.muted }}>{bulkProgress.done}/{bulkProgress.total}</div>
+              </div>
+              <div style={{ height: 8, background: C.panel2, borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ height: "100%", background: bulkProgress.errors.length > 0 ? C.amber : C.green, borderRadius: 4, width: `${bulkProgress.total > 0 ? (bulkProgress.done / bulkProgress.total) * 100 : 0}%`, transition: "width 0.4s ease" }} />
+              </div>
+              {bulkProgress.errors.length > 0 && (
+                <div style={{ fontSize: 12, color: C.red, marginTop: 8 }}>Failed: {bulkProgress.errors.join(", ")}</div>
+              )}
+            </div>
+          )}
+
+          {/* Regulation checklist */}
+          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+            {allRegs.filter(r => {
+              if (bulkFilter === "In Scope") return (scopeMap[r.id]||"Pending") === "In Scope";
+              if (bulkFilter === "Pending") return (scopeMap[r.id]||"Pending") === "Pending";
+              if (bulkFilter === "Not Analyzed") return !analysisMap[r.id];
+              if (bulkFilter === "Analyzed") return !!analysisMap[r.id];
+              return true;
+            }).map((r, i, arr) => {
+              const isChecked = bulkSelected.has(r.id);
+              const isAnalyzed = !!analysisMap[r.id];
+              const cs = scopeMap[r.id] || "Pending";
+              return (
+                <div key={r.id} onClick={() => {
+                  if (bulkRunning) return;
+                  setBulkSelected(prev => { const n = new Set(prev); isChecked ? n.delete(r.id) : n.add(r.id); return n; });
+                }} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 18px", borderBottom: i < arr.length - 1 ? `1px solid ${C.border}` : "none", cursor: bulkRunning ? "default" : "pointer", background: isChecked ? "rgba(129,140,248,0.06)" : "transparent", transition: "background 0.1s" }}>
+                  <div style={{ width: 18, height: 18, borderRadius: 5, border: `2px solid ${isChecked ? C.accent : C.border}`, background: isChecked ? C.accent : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {isChecked && <span style={{ color: "#fff", fontSize: 11, lineHeight: 1 }}>✓</span>}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+                    <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.reference} · {r.region} · {r.domain}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    <Badge text={cs} style={scopeStyle(cs)} />
+                    {isAnalyzed
+                      ? <Badge text="Analyzed" style={statusStyle("Analyzed")} />
+                      : <Badge text="Not Analyzed" style={{ bg: "rgba(90,104,128,0.1)", border: "rgba(90,104,128,0.3)", color: C.muted }} />
+                    }
+                    {bulkRunning && bulkProgress.current === r.name && (
+                      <span className="spin" style={{ display: "inline-block", width: 14, height: 14, border: `2px solid ${C.accent}`, borderTopColor: "transparent", borderRadius: "50%", marginLeft: 4 }} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {/* URL Management tab */}
-      {activeTab === "url" && (
+            {activeTab === "url" && (
         <div>
           <div style={card}>
             <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Add Regulatory URL</div>
@@ -1059,22 +1292,47 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                               {res.regulations?.map((r, i) => {
                                 const alreadyIngested = ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase());
                                 const alreadyInMaster = allRegs.some(mr => mr.name.toLowerCase() === r.name.toLowerCase() || (r.reference && mr.reference?.toLowerCase() === r.reference.toLowerCase()));
+                                const regKey = "URL:" + (r.reference || r.name).replace(/[^a-zA-Z0-9]/g, "_").substring(0, 40);
+                                const regAnalysis = analysisMap[regKey];
+                                const regScope = scopeMap[regKey] || "Pending";
                                 return (
-                                  <div key={i} style={{ background: C.panel, border: `1px solid ${alreadyIngested ? C.greenBorder : C.border}`, borderLeft: `3px solid ${alreadyIngested ? C.green : C.border}`, borderRadius: 9, padding: "12px 14px", marginBottom: 8 }}>
-                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 6 }}>
+                                  <div key={i} style={{ background: C.panel, border: `1px solid ${alreadyIngested ? C.greenBorder : C.border}`, borderLeft: `3px solid ${alreadyIngested ? C.green : regAnalysis ? C.indigo : C.border}`, borderRadius: 9, padding: "12px 14px", marginBottom: 8 }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 8 }}>
                                       <div style={{ flex: 1, minWidth: 0 }}>
-                                        <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{r.name}</div>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{r.name}</div>
+                                          {regAnalysis && <Badge text="Analyzed" style={statusStyle("Analyzed")} />}
+                                        </div>
                                         <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference}{r.jurisdiction ? ` · ${r.jurisdiction}` : ""}{r.domain ? ` · ${r.domain}` : ""}</div>
                                       </div>
-                                      <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                      <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center" }}>
+                                        {/* Scope selector */}
+                                        <select value={regScope} onChange={e => onScopeChange(regKey, e.target.value)}
+                                          style={{ background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 7, padding: "4px 8px", fontSize: 12, cursor: "pointer", outline: "none" }}>
+                                          <option>Pending</option><option>In Scope</option><option>Out of Scope</option>
+                                        </select>
+                                        <Badge text={regScope} style={scopeStyle(regScope)} />
                                         {alreadyIngested ? (
                                           <span style={{ fontSize: 11, color: C.green, fontWeight: 600, padding: "4px 8px", borderRadius: 6, background: C.greenBg, border: `1px solid ${C.greenBorder}` }}>✓ Ingested</span>
                                         ) : alreadyInMaster ? (
-                                          <span style={{ fontSize: 11, color: C.muted, padding: "4px 8px", borderRadius: 6, background: C.panel2, border: `1px solid ${C.border}` }}>In Master List</span>
+                                          <span style={{ fontSize: 11, color: C.muted, padding: "4px 8px", borderRadius: 6, background: C.panel2, border: `1px solid ${C.border}` }}>In Inventory</span>
                                         ) : (
                                           <button onClick={() => onIngest && onIngest(r, u.url, u.title || u.url)} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.greenBorder}`, background: C.greenBg, color: C.green, cursor: "pointer", whiteSpace: "nowrap" }}>↓ Ingest</button>
                                         )}
-                                        <button onClick={() => analyzeScannedReg(r)} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, cursor: "pointer", whiteSpace: "nowrap" }}>⚡ Analyze</button>
+                                        {regAnalysis ? (
+                                          <button onClick={() => {
+                                            // Navigate to analyze tab with this result shown
+                                            setActiveTab("regulation");
+                                            setResult(regAnalysis);
+                                            setSelected("");
+                                            setViewingFileResult(r.name);
+                                          }} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, cursor: "pointer", whiteSpace: "nowrap" }}>👁 View Analysis</button>
+                                        ) : (
+                                          <button onClick={() => {
+                                            const enriched = { ...r, id: regKey, marshEntities: [] };
+                                            analyzeScannedReg(enriched, regKey);
+                                          }} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, cursor: "pointer", whiteSpace: "nowrap" }}>⚡ Analyze</button>
+                                        )}
                                       </div>
                                     </div>
                                     <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6 }}>{r.summary}</div>
@@ -1099,6 +1357,12 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
       {/* Analysis Results */}
       {result && (
         <div className="fadeIn">
+          {viewingFileResult && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 16px", background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, borderRadius: 10 }}>
+              <span style={{ fontSize: 13, color: C.indigo, fontWeight: 600 }}>Analysis: {viewingFileResult}</span>
+              <button onClick={() => { setResult(null); setViewingFileResult(null); }} style={{ marginLeft: "auto", fontSize: 12, color: C.muted, background: "transparent", border: "none", cursor: "pointer" }}>✕ Close</button>
+            </div>
+          )}
           <div style={{ ...card, borderLeft: `3px solid ${riskColor(result.businessRisk)}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <div style={{ fontWeight: 700, color: C.text, fontSize: 16 }}>Executive Summary</div>
