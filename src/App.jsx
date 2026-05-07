@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { ComposableMap, Geographies, Geography, ZoomableGroup } from "react-simple-maps";
 import { REGULATIONS, CONTROLS_LIBRARY, DOMAINS, REGIONS, MARSH_ENTITIES } from "./regulatoryData";
 
 const PROXY_URL = "https://delphi-proxy.vercel.app/api/claude";
@@ -160,38 +159,32 @@ const REGION_COUNTRIES = {
   Africa: ["South Africa", "Nigeria", "Kenya", "Ghana", "Morocco"],
 };
 
-// ISO-3 codes for react-simple-maps geography matching
-const COUNTRY_ISO3 = {
-  "United States":"USA","Germany":"DEU","France":"FRA","United Kingdom":"GBR",
-  "Japan":"JPN","China":"CHN","India":"IND","Australia":"AUS","Canada":"CAN",
-  "Brazil":"BRA","South Africa":"ZAF","Nigeria":"NGA","Singapore":"SGP",
-  "Hong Kong":"HKG","UAE":"ARE","Saudi Arabia":"SAU","Ireland":"IRL",
-  "Netherlands":"NLD","Switzerland":"CHE","Italy":"ITA","Spain":"ESP",
-  "Sweden":"SWE","Norway":"NOR","Denmark":"DNK","Belgium":"BEL",
-  "Austria":"AUT","Poland":"POL","Czech Republic":"CZE","Mexico":"MEX",
-  "Argentina":"ARG","Chile":"CHL","Colombia":"COL","South Korea":"KOR",
-  "Taiwan":"TWN","Indonesia":"IDN","Malaysia":"MYS","Thailand":"THA",
-  "Philippines":"PHL","New Zealand":"NZL","Israel":"ISR","Turkey":"TUR",
-  "Egypt":"EGY","Kenya":"KEN","Ghana":"GHA","Morocco":"MAR",
-};
 
-const GEO_URL = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
-
-// Map ISO numeric (used in world-atlas) to ISO-3
-const ISO_NUM_TO_ALPHA3 = {
-  "840":"USA","276":"DEU","250":"FRA","826":"GBR","392":"JPN","156":"CHN",
-  "356":"IND","036":"AUS","124":"CAN","076":"BRA","710":"ZAF","566":"NGA",
-  "702":"SGP","344":"HKG","784":"ARE","682":"SAU","372":"IRL","528":"NLD",
-  "756":"CHE","380":"ITA","724":"ESP","752":"SWE","578":"NOR","208":"DNK",
-  "056":"BEL","040":"AUT","616":"POL","203":"CZE","484":"MEX","032":"ARG",
-  "152":"CHL","170":"COL","410":"KOR","158":"TWN","360":"IDN","458":"MYS",
-  "764":"THA","608":"PHL","554":"NZL","376":"ISR","792":"TUR","818":"EGY",
-  "404":"KEN","288":"GHA","504":"MAR",
+// Country ISO3 to name mapping for tooltip
+const ISO3_TO_NAME = {
+  "USA":"United States","DEU":"Germany","FRA":"France","GBR":"United Kingdom",
+  "JPN":"Japan","CHN":"China","IND":"India","AUS":"Australia","CAN":"Canada",
+  "BRA":"Brazil","ZAF":"South Africa","NGA":"Nigeria","SGP":"Singapore",
+  "HKG":"Hong Kong","ARE":"UAE","SAU":"Saudi Arabia","IRL":"Ireland",
+  "NLD":"Netherlands","CHE":"Switzerland","ITA":"Italy","ESP":"Spain",
+  "SWE":"Sweden","NOR":"Norway","DNK":"Denmark","BEL":"Belgium","AUT":"Austria",
+  "POL":"Poland","CZE":"Czech Republic","MEX":"Mexico","ARG":"Argentina",
+  "CHL":"Chile","COL":"Colombia","KOR":"South Korea","TWN":"Taiwan",
+  "IDN":"Indonesia","MYS":"Malaysia","THA":"Thailand","PHL":"Philippines",
+  "NZL":"New Zealand","ISR":"Israel","TUR":"Turkey","EGY":"Egypt",
+  "KEN":"Kenya","GHA":"Ghana","MAR":"Morocco",
 };
 
 function WorldHeatmap({ allRegs, scopeMap }) {
-  const [position, setPosition] = useState({ coordinates: [0, 20], zoom: 1 });
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [tooltip, setTooltip] = useState(null);
+  const [geoData, setGeoData] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef(null);
+  const transformRef = useRef(transform);
+  useEffect(() => { transformRef.current = transform; }, [transform]);
 
   const countryData = useMemo(() => {
     const map = {};
@@ -206,113 +199,211 @@ function WorldHeatmap({ allRegs, scopeMap }) {
     return map;
   }, [allRegs, scopeMap]);
 
-  // Build lookup by ISO-3
+  const maxCount = useMemo(() => Math.max(1, ...Object.values(countryData).map(d => d.total)), [countryData]);
+
+  // Build iso3 -> data lookup
   const dataByIso3 = useMemo(() => {
     const m = {};
     Object.entries(countryData).forEach(([name, data]) => {
-      const iso3 = COUNTRY_ISO3[name];
+      // reverse lookup: find iso3 from ISO3_TO_NAME
+      const iso3 = Object.entries(ISO3_TO_NAME).find(([,n]) => n === name)?.[0];
       if (iso3) m[iso3] = { ...data, name };
     });
     return m;
   }, [countryData]);
 
-  const maxCount = useMemo(() => Math.max(1, ...Object.values(countryData).map(d => d.total)), [countryData]);
+  // Load world topojson
+  useEffect(() => {
+    fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
+      .then(r => r.json()).then(setGeoData).catch(() => {});
+  }, []);
 
-  const getCountryColor = (iso3) => {
-    const data = dataByIso3[iso3];
-    if (!data) return "#111827";
-    const intensity = Math.min(1, data.total / maxCount);
-    // Teal gradient: dark navy → bright teal, matching PACMap style
-    const r = Math.round(10 + intensity * 6);
-    const g = Math.round(30 + intensity * 155);
-    const b = Math.round(50 + intensity * 120);
-    return `rgb(${r},${g},${b})`;
-  };
+  const W = 960, H = 500;
 
-  const getCountryStroke = (iso3) => {
-    const data = dataByIso3[iso3];
-    return data ? "rgba(0,220,180,0.25)" : "#1c2a3a";
-  };
+  // Mercator projection
+  const project = useCallback(([lng, lat]) => {
+    const x = (lng + 180) * (W / 360);
+    const latRad = (lat * Math.PI) / 180;
+    const mercN = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
+    const y = H / 2 - (W * mercN) / (2 * Math.PI);
+    return [x, Math.max(0, Math.min(H, y))];
+  }, []);
 
-  const handleMoveEnd = useCallback((pos) => setPosition(pos), []);
+  // Decode topojson arcs into canvas paths
+  const drawTopoFeatures = useCallback((ctx, topo) => {
+    if (!topo?.objects?.countries?.geometries) return;
+    const { scale, translate } = topo.transform || { scale: [1,1], translate: [0,0] };
+    const decodeArc = (arcIdx) => {
+      const arc = arcIdx < 0 ? [...topo.arcs[~arcIdx]].reverse() : topo.arcs[arcIdx];
+      let ax = 0, ay = 0;
+      return arc.map(([dx, dy]) => {
+        ax += dx; ay += dy;
+        const lon = ax * scale[0] + translate[0];
+        const lat = ay * scale[1] + translate[1];
+        return project([lon, lat]);
+      });
+    };
+
+    topo.objects.countries.geometries.forEach(geom => {
+      // Get numeric id -> iso3
+      const numId = String(geom.id || "").padStart(3, "0");
+      const iso3Map = {"840":"USA","276":"DEU","250":"FRA","826":"GBR","392":"JPN","156":"CHN",
+        "356":"IND","036":"AUS","124":"CAN","076":"BRA","710":"ZAF","566":"NGA","702":"SGP",
+        "344":"HKG","784":"ARE","682":"SAU","372":"IRL","528":"NLD","756":"CHE","380":"ITA",
+        "724":"ESP","752":"SWE","578":"NOR","208":"DNK","056":"BEL","040":"AUT","616":"POL",
+        "203":"CZE","484":"MEX","032":"ARG","152":"CHL","170":"COL","410":"KOR","158":"TWN",
+        "360":"IDN","458":"MYS","764":"THA","608":"PHL","554":"NZL","376":"ISR","792":"TUR",
+        "818":"EGY","404":"KEN","288":"GHA","504":"MAR"};
+      const iso3 = iso3Map[numId] || "";
+      const data = dataByIso3[iso3];
+
+      // Color: teal intensity based on regulation count
+      let fill, stroke;
+      if (data) {
+        const intensity = Math.min(1, data.total / maxCount);
+        const r = Math.round(8 + intensity * 4);
+        const g = Math.round(28 + intensity * 172);
+        const b = Math.round(45 + intensity * 135);
+        fill = `rgb(${r},${g},${b})`;
+        stroke = "rgba(0,220,180,0.2)";
+      } else {
+        fill = "#111827";
+        stroke = "#1c2a3a";
+      }
+
+      ctx.fillStyle = fill;
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 0.4;
+
+      const rings = geom.type === "Polygon" ? geom.arcs : geom.type === "MultiPolygon" ? geom.arcs.flat() : [];
+      rings.forEach(ring => {
+        ctx.beginPath();
+        ring.forEach(arcIdx => {
+          const pts = decodeArc(arcIdx);
+          pts.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
+        });
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      });
+    });
+  }, [geoData, dataByIso3, maxCount, project]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#0a0f1a";
+    ctx.fillRect(0, 0, W, H);
+    // Grid lines
+    ctx.strokeStyle = "#161e2e"; ctx.lineWidth = 0.5;
+    [-60,-30,0,30,60].forEach(lat => {
+      const [,y] = project([0, lat]);
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    });
+    [-150,-120,-90,-60,-30,0,30,60,90,120,150].forEach(lng => {
+      const [x] = project([lng, 0]);
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    });
+    if (geoData) drawTopoFeatures(ctx, geoData);
+  }, [geoData, drawTopoFeatures, project]);
+
+  const getCountryAtPoint = useCallback((clientX, clientY) => {
+    const el = containerRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const t = transformRef.current;
+    const cx = (clientX - rect.left - t.x) / t.scale;
+    const cy = (clientY - rect.top - t.y) / t.scale;
+    // Find closest country centroid
+    const centroids = {
+      "USA":[37,-95],"DEU":[51,10],"FRA":[46,2],"GBR":[54,-2],"JPN":[36,138],
+      "CHN":[35,105],"IND":[20,77],"AUS":[-25,134],"CAN":[56,-96],"BRA":[-10,-55],
+      "ZAF":[-29,25],"NGA":[9,8],"SGP":[1.3,103.8],"HKG":[22.3,114.2],"ARE":[24,54],
+      "SAU":[24,45],"IRL":[53,-8],"NLD":[52,5],"CHE":[47,8],"ITA":[42,12],
+      "ESP":[40,-4],"SWE":[60,15],"NOR":[60,8],"DNK":[56,10],"BEL":[50,4],
+      "AUT":[47,14],"POL":[52,20],"CZE":[50,15],"MEX":[23,-102],"ARG":[-34,-64],
+      "CHL":[-33,-71],"COL":[4,-72],"KOR":[37,128],"TWN":[24,121],"IDN":[-5,120],
+      "MYS":[3,112],"THA":[15,101],"PHL":[13,122],"NZL":[-41,174],"ISR":[31,35],
+      "TUR":[39,35],"EGY":[27,30],"KEN":[-1,37],"GHA":[8,-2],"MAR":[32,-5],
+    };
+    let closest = null, minDist = 40;
+    Object.entries(centroids).forEach(([iso3, [lat, lng]]) => {
+      const [px, py] = project([lng, lat]);
+      const d = Math.hypot(cx - px, cy - py);
+      if (d < minDist) { minDist = d; closest = iso3; }
+    });
+    return closest;
+  }, [project]);
+
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    setTransform(t => ({ ...t, scale: Math.max(0.6, Math.min(8, t.scale * (e.deltaY < 0 ? 1.2 : 0.85))) }));
+  }, []);
+  const handleMouseDown = useCallback((e) => {
+    setDragging(true);
+    dragStart.current = { x: e.clientX - transformRef.current.x, y: e.clientY - transformRef.current.y };
+  }, []);
+  const handleMouseMove = useCallback((e) => {
+    if (dragging && dragStart.current) setTransform(t => ({ ...t, x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y }));
+    const iso3 = getCountryAtPoint(e.clientX, e.clientY);
+    if (iso3) {
+      const data = dataByIso3[iso3];
+      setTooltip({ name: ISO3_TO_NAME[iso3] || iso3, x: e.clientX, y: e.clientY, data: data || null });
+    } else setTooltip(null);
+  }, [dragging, getCountryAtPoint, dataByIso3]);
+  const handleMouseUp = useCallback(() => setDragging(false), []);
+  const handleKey = useCallback((e) => {
+    if (e.key === "Escape") setTransform({ x: 0, y: 0, scale: 1 });
+    if (e.key === "+" || e.key === "=") setTransform(t => ({ ...t, scale: Math.min(8, t.scale * 1.3) }));
+    if (e.key === "-") setTransform(t => ({ ...t, scale: Math.max(0.6, t.scale * 0.8) }));
+  }, []);
 
   return (
     <div style={{ background: "#0d1520", border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginTop: 20 }}>
       <div style={{ padding: "18px 22px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ fontWeight: 700, fontSize: 16, color: C.text, letterSpacing: -0.3 }}>Global Regulatory Landscape</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <button onClick={() => setPosition(p => ({ ...p, zoom: Math.min(8, p.zoom * 1.5) }))}
-            style={{ width: 36, height: 36, borderRadius: 9, border: `1px solid rgba(255,255,255,0.1)`, background: "rgba(255,255,255,0.08)", color: C.text, fontSize: 20, cursor: "pointer", display:"flex", alignItems:"center", justifyContent:"center", lineHeight: 1 }}>+</button>
-          <button onClick={() => setPosition(p => ({ ...p, zoom: Math.max(1, p.zoom * 0.7) }))}
-            style={{ width: 36, height: 36, borderRadius: 9, border: `1px solid rgba(255,255,255,0.1)`, background: "rgba(255,255,255,0.08)", color: C.text, fontSize: 20, cursor: "pointer", display:"flex", alignItems:"center", justifyContent:"center", lineHeight: 1 }}>−</button>
-          <button onClick={() => setPosition({ coordinates: [0, 20], zoom: 1 })}
-            style={{ width: 36, height: 36, borderRadius: 9, border: `1px solid rgba(255,255,255,0.1)`, background: "rgba(255,255,255,0.08)", color: C.muted, fontSize: 13, cursor: "pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>⊡</button>
+          {[{z:"+",fn:()=>setTransform(t=>({...t,scale:Math.min(8,t.scale*1.3)}))},
+            {z:"−",fn:()=>setTransform(t=>({...t,scale:Math.max(0.6,t.scale*0.8)}))},
+            {z:"⊡",fn:()=>setTransform({x:0,y:0,scale:1})}
+          ].map(({z,fn})=>(
+            <button key={z} onClick={fn} style={{width:36,height:36,borderRadius:9,border:"1px solid rgba(255,255,255,0.1)",background:"rgba(255,255,255,0.08)",color:C.text,fontSize:z==="⊡"?14:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>{z}</button>
+          ))}
         </div>
       </div>
-      <div style={{ position: "relative", background: "#0a0f1a" }}>
-        <ComposableMap
-          projection="geoMercator"
-          projectionConfig={{ scale: 140, center: [0, 20] }}
-          style={{ width: "100%", height: 480 }}
-        >
-          <ZoomableGroup
-            zoom={position.zoom}
-            center={position.coordinates}
-            onMoveEnd={handleMoveEnd}
-            minZoom={1}
-            maxZoom={8}
-          >
-            <Geographies geography={GEO_URL}>
-              {({ geographies }) =>
-                geographies.map(geo => {
-                  const numId = geo.id?.toString().padStart(3, "0");
-                  const iso3 = ISO_NUM_TO_ALPHA3[numId] || geo.properties?.a3 || "";
-                  const data = dataByIso3[iso3];
-                  const fill = getCountryColor(iso3);
-                  const stroke = getCountryStroke(iso3);
-                  return (
-                    <Geography
-                      key={geo.rsmKey}
-                      geography={geo}
-                      fill={fill}
-                      stroke={stroke}
-                      strokeWidth={data ? 0.6 : 0.3}
-                      style={{
-                        default: { outline: "none" },
-                        hover: { outline: "none", fill: data ? fill.replace("rgb(", "rgba(").replace(")", ",1.0)") : "#1a2d40", cursor: "pointer" },
-                        pressed: { outline: "none" },
-                      }}
-                      onMouseEnter={(e) => { if (!data) return; setTooltip({ name: data.name, x: e.clientX, y: e.clientY, data }); }}
-                      onMouseMove={(e) => { if (!data) return; setTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null); }}
-                      onMouseLeave={() => setTooltip(null)}
-                    />
-                  );
-                })
-              }
-            </Geographies>
-          </ZoomableGroup>
-        </ComposableMap>
-        {/* Gradient legend - bottom center like PACMap */}
-        <div style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", textAlign: "center" }}>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 6 }}>Regulations Tracked</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>0</span>
-            <div style={{ width: 200, height: 8, borderRadius: 4, background: "linear-gradient(to right, #0a1525, #0a4a3a, #00c896)" }} />
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>40+</span>
+      <div ref={containerRef} style={{position:"relative",height:480,overflow:"hidden",cursor:dragging?"grabbing":"grab",touchAction:"pan-y",background:"#0a0f1a"}}
+        onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp} onMouseLeave={()=>{handleMouseUp();setTooltip(null);}}
+        onKeyDown={handleKey} tabIndex={0}>
+        <canvas ref={canvasRef} width={W} height={H}
+          style={{position:"absolute",transform:`translate(${transform.x}px,${transform.y}px) scale(${transform.scale})`,transformOrigin:"0 0",transition:dragging?"none":"transform 0.08s"}}/>
+        {!geoData && <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:C.muted,fontSize:13}}>Loading map...</div>}
+        <div style={{position:"absolute",bottom:20,left:"50%",transform:"translateX(-50%)",textAlign:"center"}}>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.35)",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6}}>Regulations Tracked</div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:11,color:"rgba(255,255,255,0.35)"}}>0</span>
+            <div style={{width:200,height:8,borderRadius:4,background:"linear-gradient(to right, #0a1525, #0a4a3a, #00c896)"}}/>
+            <span style={{fontSize:11,color:"rgba(255,255,255,0.35)"}}>40+</span>
           </div>
         </div>
+        <div style={{position:"absolute",top:14,left:14,fontSize:11,color:"rgba(255,255,255,0.3)"}}>+/− zoom · drag to pan · Esc reset</div>
       </div>
       {tooltip && (
-        <div style={{ position: "fixed", left: tooltip.x + 14, top: tooltip.y - 12, background: "#0f1a2e", border: `1px solid rgba(0,200,150,0.2)`, borderRadius: 10, padding: "10px 16px", fontSize: 13, pointerEvents: "none", zIndex: 9999, boxShadow: "0 10px 30px rgba(0,0,0,0.7)", minWidth: 170 }}>
-          <div style={{ fontWeight: 700, color: "#fff", marginBottom: 6, fontSize: 14 }}>{tooltip.name}</div>
-          <div style={{ color: "rgba(255,255,255,0.5)" }}>Regulations: <span style={{ color: "#00c896", fontWeight: 600 }}>{tooltip.data.total}</span></div>
-          <div style={{ color: "rgba(255,255,255,0.5)" }}>In Scope: <span style={{ color: "#10b981", fontWeight: 600 }}>{tooltip.data.inScope}</span></div>
-          <div style={{ color: "rgba(255,255,255,0.5)" }}>Coverage: <span style={{ color: "#fff", fontWeight: 600 }}>{Math.round(tooltip.data.inScope / tooltip.data.total * 100)}%</span></div>
+        <div style={{position:"fixed",left:tooltip.x+14,top:tooltip.y-12,background:"#0f1a2e",border:"1px solid rgba(0,200,150,0.2)",borderRadius:10,padding:"10px 16px",fontSize:13,pointerEvents:"none",zIndex:9999,boxShadow:"0 10px 30px rgba(0,0,0,0.7)",minWidth:170}}>
+          <div style={{fontWeight:700,color:"#fff",marginBottom:6,fontSize:14}}>{tooltip.name}</div>
+          {tooltip.data ? <>
+            <div style={{color:"rgba(255,255,255,0.5)"}}>Regulations: <span style={{color:"#00c896",fontWeight:600}}>{tooltip.data.total}</span></div>
+            <div style={{color:"rgba(255,255,255,0.5)"}}>In Scope: <span style={{color:"#10b981",fontWeight:600}}>{tooltip.data.inScope}</span></div>
+            <div style={{color:"rgba(255,255,255,0.5)"}}>Coverage: <span style={{color:"#fff",fontWeight:600}}>{Math.round(tooltip.data.inScope/tooltip.data.total*100)}%</span></div>
+          </> : <div style={{color:"rgba(255,255,255,0.4)",fontStyle:"italic"}}>No regulations mapped</div>}
         </div>
       )}
     </div>
   );
 }
+
 
 function Dashboard({ allRegs, scopeMap, analysisMap }) {
   const byScope = useMemo(() => { const c = { "In Scope": 0, "Out of Scope": 0, Pending: 0 }; allRegs.forEach(r => { const s = scopeMap[r.id] || "Pending"; if (s in c) c[s]++; }); return c; }, [allRegs, scopeMap]);
