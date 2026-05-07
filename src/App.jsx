@@ -24,7 +24,7 @@ async function jbSet(key, value) {
 
 const C = {
   bg: "#070910", panel: "#0e1118", panel2: "#151a24", border: "#232d3f",
-  text: "#f0f4fc", muted: "#94a3b8", accent: "#818cf8", accentHover: "#a5b4fc",
+  text: "#ffffff", muted: "#b8c5d6", accent: "#818cf8", accentHover: "#a5b4fc",
   green: "#34d399", greenBg: "rgba(52,211,153,0.1)", greenBorder: "rgba(52,211,153,0.3)",
   red: "#f87171", redBg: "rgba(248,113,113,0.1)", redBorder: "rgba(248,113,113,0.3)",
   amber: "#fbbf24", amberBg: "rgba(251,191,36,0.1)", amberBorder: "rgba(251,191,36,0.3)",
@@ -568,20 +568,87 @@ function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComp
 
   const crawlUrl = async (urlObj) => {
     setCrawling(urlObj.id);
+    setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "loading", summary: "Fetching page content..." } }));
     try {
-      const res = await fetch(PROXY_URL, {
+      // Step 1: Fetch the page content via proxy (web_search tool enables browsing)
+      const fetchRes = await fetch(PROXY_URL, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-5", max_tokens: 2000,
-          messages: [{ role: "user", content: `Fetch and analyze this URL for regulatory content: ${urlObj.url}\n\nIdentify: 1) Is this a specific regulation or a regulatory site? 2) Key regulation names/references found. 3) Jurisdiction and domain. 4) Summary of obligations. Respond in JSON: {"type":"regulation|site","regulations":[{"name":"","reference":"","jurisdiction":"","summary":""}],"siteDescription":""}` }]
+          model: "claude-sonnet-4-5", max_tokens: 4000,
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+          messages: [{ role: "user", content: `You are a regulatory compliance analyst. Search for and analyze the content at this URL: ${urlObj.url}
+
+Your task:
+1. Search for the page content and any regulations referenced on it
+2. Identify all specific regulations, laws, or compliance requirements mentioned
+3. For each regulation found, extract: name, official reference/citation, jurisdiction, regulatory domain, and key obligations summary
+
+Respond ONLY with this JSON (no markdown, no backticks):
+{"type":"regulation|site","siteDescription":"one sentence about what this page/site is","regulations":[{"name":"Full regulation name","reference":"Official citation e.g. EU 2016/679","jurisdiction":"Country or region","domain":"e.g. Data Privacy, Financial Services, AML","summary":"2-3 sentence description of key obligations","effectiveDate":"YYYY-MM-DD or empty","deadline":"YYYY-MM-DD or empty"}]}
+
+If this is a single regulation document, set type to "regulation". If it is a regulatory body website with multiple regulations, set type to "site". Always return at least one regulation if any compliance content is found.` }]
         })
       });
-      const data = await res.json();
-      const text = (data.content?.[0]?.text || "").replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-      try { setUrlResults(prev => ({ ...prev, [urlObj.id]: JSON.parse(text) })); }
-      catch { setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "error", summary: text.substring(0, 300) } })); }
-    } catch (e) { setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "error", summary: e.message } })); }
+      const data = await fetchRes.json();
+      // Extract text from response (may include tool use blocks)
+      const textBlock = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+      const clean = textBlock.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+      let parsed;
+      try {
+        parsed = JSON.parse(clean);
+      } catch {
+        const m = clean.match(/\{[\s\S]*\}/);
+        try { parsed = m ? JSON.parse(m[0]) : null; } catch { parsed = null; }
+      }
+      if (parsed && (parsed.regulations?.length > 0 || parsed.siteDescription)) {
+        setUrlResults(prev => ({ ...prev, [urlObj.id]: parsed }));
+      } else {
+        setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "error", summary: "Could not parse regulatory content from this URL. Try a more specific regulation URL." } }));
+      }
+    } catch (e) {
+      setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "error", summary: e.message } }));
+    }
     setCrawling(null);
+  };
+
+  // Run full analysis on a regulation found via URL scan
+  const analyzeScannedReg = async (scannedReg) => {
+    setActiveTab("regulation");
+    setResult(null);
+    setLoading(true); setError("");
+    try {
+      const fakeReg = {
+        name: scannedReg.name, reference: scannedReg.reference,
+        region: scannedReg.jurisdiction, domain: scannedReg.domain || "Compliance",
+        summary: scannedReg.summary, effectiveDate: scannedReg.effectiveDate || "",
+        deadline: scannedReg.deadline || "", marshEntities: [],
+      };
+      const thisRegControls = CONTROLS_LIBRARY.filter(c => c.regulations.includes(selected));
+      const otherControls = CONTROLS_LIBRARY.filter(c => !c.regulations.includes(selected) && c.regulations.some(rId => inScopeIds.has(rId)));
+      const prompt = `You are a regulatory compliance expert. Respond with ONLY a valid JSON object - no markdown, no backticks, no text outside JSON. No newlines inside string values.
+
+Regulation: ${fakeReg.name} (${fakeReg.reference}) | ${fakeReg.region} | ${fakeReg.domain}
+Summary: ${fakeReg.summary}
+Marsh entities in scope: Unknown - assess based on regulation content and jurisdiction
+
+Controls ALREADY MAPPED: ${thisRegControls.map(c => c.title).join(", ") || "None"}
+Controls from other in-scope regulations: ${otherControls.map(c => c.title).join(", ") || "None"}
+
+Return this exact JSON (string values max 25 words, reasons max 10 words):
+{"executiveSummary":"2 sentence summary","businessRisk":"High","riskRationale":"one sentence","keyObligations":["obligation 1","obligation 2","obligation 3"],"marshScope":[{"entity":"Marsh (Parent)","inScope":true,"reason":"short reason"},{"entity":"Marsh Risk","inScope":true,"reason":"short reason"},{"entity":"Guy Carpenter / Marsh Re","inScope":false,"reason":"short reason"},{"entity":"Mercer","inScope":false,"reason":"short reason"},{"entity":"Oliver Wyman","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Limited (UK)","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Ireland","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Asset Management LLC","inScope":false,"reason":"short reason"},{"entity":"Victor Insurance","inScope":false,"reason":"short reason"},{"entity":"McGriff Insurance Services","inScope":false,"reason":"short reason"}],"allControls":[{"title":"name","description":"what to do","priority":"Immediate","isNew":true}],"gapAnalysis":"one paragraph","deadlineRisk":"one sentence or empty string","recommendedActions":["action 1","action 2","action 3"]}
+
+Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allControls=ALL controls needed. marshScope must have all 12 entities. Output ONLY raw JSON.`;
+
+      const res = await fetch(PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 4000, messages: [{ role: "user", content: prompt }] }) });
+      const data = await res.json();
+      const raw = data.content?.[0]?.text || "";
+      const text = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(text); }
+      catch { const m = text.match(/\{[\s\S]*\}/); try { parsed = JSON.parse(m?.[0]); } catch { parsed = { executiveSummary: "Parse error — retry.", businessRisk: "Medium", riskRationale: "", keyObligations: [], newControls: [], gapAnalysis: "", deadlineRisk: "", recommendedActions: [] }; } }
+      setResult(parsed);
+    } catch(e) { setError(e.message); }
+    finally { setLoading(false); }
   };
 
   const handleFile = (e) => {
@@ -718,12 +785,12 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                 <div>
                   <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.green, fontWeight: 700, marginBottom: 8 }}>● In Scope ({marshScopeFromReg.filter(e => e.inScope).length})</div>
                   {marshScopeFromReg.filter(e => e.inScope).map(e => { const ai = result?.marshScope?.find(x => x.entity === e.entity); return (<div key={e.entity} style={{ background: C.greenBg, border: `1px solid ${C.greenBorder}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: "10px 13px", marginBottom: 7 }}><div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{e.entity}</div>{ai?.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{ai.reason}</div>}</div>); })}
-                  {marshScopeFromReg.filter(e => e.inScope).length === 0 && <div style={{ fontSize: 13, color: C.muted, fontStyle: "italic" }}>None</div>}
+                  {marshScopeFromReg.filter(e => e.inScope).length === 0 && <div style={{ fontSize: 13, color: C.text, fontStyle: "italic" }}>None</div>}
                 </div>
                 <div>
                   <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, fontWeight: 700, marginBottom: 8 }}>○ Out of Scope ({marshScopeFromReg.filter(e => !e.inScope).length})</div>
                   {marshScopeFromReg.filter(e => !e.inScope).map(e => { const ai = result?.marshScope?.find(x => x.entity === e.entity); return (<div key={e.entity} style={{ background: C.panel, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.border}`, borderRadius: 8, padding: "10px 13px", marginBottom: 7, opacity: 0.65 }}><div style={{ fontSize: 13, fontWeight: 600, color: C.muted }}>{e.entity}</div>{ai?.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{ai.reason}</div>}</div>); })}
-                  {marshScopeFromReg.filter(e => !e.inScope).length === 0 && <div style={{ fontSize: 13, color: C.muted, fontStyle: "italic" }}>None</div>}
+                  {marshScopeFromReg.filter(e => !e.inScope).length === 0 && <div style={{ fontSize: 13, color: C.text, fontStyle: "italic" }}>None</div>}
                 </div>
               </div>
               <div style={{ fontSize: 11, color: C.muted, marginTop: 10, fontStyle: "italic" }}>Always validate with legal counsel.</div>
@@ -810,7 +877,9 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                   </div>
                   {res && (
                     <div style={{ background: C.panel2, borderRadius: 9, padding: 14, marginTop: 8 }}>
-                      {res.type === "error" ? (
+                      {res.type === "loading" ? (
+                        <div style={{ color: C.muted, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}><span className="spin" style={{ display: "inline-block", width: 12, height: 12, border: `2px solid ${C.accent}`, borderTopColor: "transparent", borderRadius: "50%" }}/>Scanning URL and identifying regulations...</div>
+                      ) : res.type === "error" ? (
                         <div style={{ color: C.red, fontSize: 13 }}>Scan error: {res.summary}</div>
                       ) : (
                         <>
@@ -819,10 +888,16 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                           </div>
                           {res.siteDescription && <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>{res.siteDescription}</div>}
                           {res.regulations?.map((r, i) => (
-                            <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 13px", marginBottom: 8 }}>
-                              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{r.name}</div>
-                              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.reference} · {r.jurisdiction}</div>
-                              <div style={{ fontSize: 12, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>{r.summary}</div>
+                            <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", marginBottom: 8 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 6 }}>
+                                <div>
+                                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{r.name}</div>
+                                  <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference} · {r.jurisdiction} · {r.domain}</div>
+                                </div>
+                                <button onClick={() => analyzeScannedReg(r)} style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, cursor: "pointer", whiteSpace: "nowrap" }}>⚡ Analyze</button>
+                              </div>
+                              <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6 }}>{r.summary}</div>
+                              {r.deadline && <div style={{ fontSize: 12, color: C.amber, marginTop: 6 }}>Deadline: {r.deadline}</div>}
                             </div>
                           ))}
                         </>
