@@ -24,7 +24,7 @@ async function jbSet(key, value) {
   try { const rec = await jbGet(); const up = { ...rec, [key]: value }; await fetch(JSONBIN_URL, { method: "PUT", headers: JH, body: JSON.stringify(up) }); } catch {}
 }
 
-const C = {
+const DARK_THEME = {
   bg: "#070910", panel: "#0e1118", panel2: "#151a24", border: "#232d3f",
   text: "#ffffff", muted: "#b8c5d6", accent: "#818cf8", accentHover: "#a5b4fc",
   green: "#34d399", greenBg: "rgba(52,211,153,0.1)", greenBorder: "rgba(52,211,153,0.3)",
@@ -34,6 +34,20 @@ const C = {
   indigo: "#818cf8", indigoBg: "rgba(129,140,248,0.1)", indigoBorder: "rgba(129,140,248,0.3)",
   purple: "#c084fc", purpleBg: "rgba(192,132,252,0.1)", purpleBorder: "rgba(192,132,252,0.3)",
 };
+
+const LIGHT_THEME = {
+  bg: "#f0f4f8", panel: "#ffffff", panel2: "#f5f7fa", border: "#dde3ed",
+  text: "#0f172a", muted: "#475569", accent: "#4f46e5", accentHover: "#6366f1",
+  green: "#059669", greenBg: "rgba(5,150,105,0.08)", greenBorder: "rgba(5,150,105,0.25)",
+  red: "#dc2626", redBg: "rgba(220,38,38,0.08)", redBorder: "rgba(220,38,38,0.25)",
+  amber: "#d97706", amberBg: "rgba(217,119,6,0.08)", amberBorder: "rgba(217,119,6,0.25)",
+  blue: "#2563eb", blueBg: "rgba(37,99,235,0.08)", blueBorder: "rgba(37,99,235,0.25)",
+  indigo: "#4f46e5", indigoBg: "rgba(79,70,229,0.08)", indigoBorder: "rgba(79,70,229,0.25)",
+  purple: "#7c3aed", purpleBg: "rgba(124,58,237,0.08)", purpleBorder: "rgba(124,58,237,0.25)",
+};
+
+// C is set dynamically - initialized to dark, updated when theme changes
+let C = { ...DARK_THEME };
 
 const formatDeadline = (iso) => { if (!iso) return null; return new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); };
 const daysUntil = (iso) => { if (!iso) return null; const n = new Date(); n.setHours(0, 0, 0, 0); return Math.round((new Date(iso + "T00:00:00") - n) / 86400000); };
@@ -55,26 +69,29 @@ const NAV = [
   { id: "calendar", label: "Calendar", icon: "▦" },
 ];
 
-const G = `
+const getGlobalStyles = (theme) => `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:#070910;color:#e8edf5;font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
+body{background:${theme === "light" ? "#f0f4f8" : "#070910"};color:${theme === "light" ? "#0f172a" : "#ffffff"};font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
 input,select,button,textarea{font-family:inherit;font-size:14px;}
 ::-webkit-scrollbar{width:6px;height:6px;}
-::-webkit-scrollbar-thumb{background:#1c2333;border-radius:6px;}
+::-webkit-scrollbar-thumb{background:${theme === "light" ? "#cbd5e1" : "#1c2333"};border-radius:6px;}
 ::-webkit-scrollbar-track{background:transparent;}
 @keyframes spin{to{transform:rotate(360deg)}}.spin{animation:spin 0.8s linear infinite;}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}.fadeIn{animation:fadeIn 0.25s ease}
 table{border-collapse:collapse;width:100%;}
-tr:hover td{background:rgba(255,255,255,0.015);}
+tr:hover td{background:${theme === "light" ? "rgba(0,0,0,0.02)" : "rgba(255,255,255,0.015)"};}
 `;
+const G = getGlobalStyles("dark"); // default, will be overridden by App
 
-function Login({ onLogin }) {
+function Login({ onLogin, theme, toggleTheme }) {
+  C = theme === "light" ? { ...LIGHT_THEME } : { ...DARK_THEME };
   const [pw, setPw] = useState(""); const [err, setErr] = useState("");
   const go = () => pw === "Regscan" ? onLogin() : setErr("Incorrect password.");
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <style>{G}</style>
+    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, position: "relative" }}>
+      {toggleTheme && <button onClick={toggleTheme} style={{ position: "absolute", top: 20, right: 20, fontSize: 20, padding: "6px 10px", borderRadius: 9, cursor: "pointer", border: `1px solid ${C.border}`, background: C.panel, color: C.text }} title="Toggle theme">{theme === "dark" ? "☀️" : "🌙"}</button>}
+      <style>{getGlobalStyles(theme || "dark")}</style>
       <div style={{ width: "100%", maxWidth: 520 }}>
         <div style={{ textAlign: "center", marginBottom: 44 }}>
           <div style={{ fontSize: 48, fontWeight: 900, color: C.text, letterSpacing: -2, marginBottom: 12, lineHeight: 1 }}>
@@ -177,7 +194,7 @@ const ISO3_TO_NAME = {
   "KEN":"Kenya","GHA":"Ghana","MAR":"Morocco",
 };
 
-function WorldHeatmap({ allRegs, scopeMap }) {
+function WorldHeatmap({ allRegs, scopeMap, theme }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
@@ -270,8 +287,8 @@ function WorldHeatmap({ allRegs, scopeMap }) {
         fill = `rgb(${r},${g},${b})`;
         stroke = "rgba(0,200,160,0.25)";
       } else {
-        fill = "#111c2e";
-        stroke = "#1a2a3e";
+        fill = theme === "light" ? "#c8d6e5" : "#111c2e";
+        stroke = theme === "light" ? "#b0c2d6" : "#1a2a3e";
       }
 
       ctx.fillStyle = fill;
@@ -297,17 +314,17 @@ function WorldHeatmap({ allRegs, scopeMap }) {
         });
       }
     });
-  }, [geoData, dataByIso3, maxCount, project]);
+  }, [geoData, dataByIso3, maxCount, project, theme]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = "#0a0f1a";
+    ctx.fillStyle = theme === "light" ? "#dde6f0" : "#0a0f1a";
     ctx.fillRect(0, 0, W, H);
     // Grid lines
-    ctx.strokeStyle = "#161e2e"; ctx.lineWidth = 0.5;
+    ctx.strokeStyle = theme === "light" ? "#c5d0de" : "#161e2e"; ctx.lineWidth = 0.5;
     [-60,-30,0,30,60].forEach(lat => {
       const [,y] = project([0, lat]);
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
@@ -317,7 +334,7 @@ function WorldHeatmap({ allRegs, scopeMap }) {
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
     });
     if (geoData) drawTopoFeatures(ctx, geoData);
-  }, [geoData, drawTopoFeatures, project]);
+  }, [geoData, drawTopoFeatures, project, theme]);
 
   const getCountryAtPoint = useCallback((clientX, clientY) => {
     const el = containerRef.current;
@@ -371,12 +388,12 @@ function WorldHeatmap({ allRegs, scopeMap }) {
   }, []);
 
   return (
-    <div style={{ background: "#0d1520", border: `2px solid ${C.border}`, borderRadius: 16, overflow: "hidden", marginTop: 20, boxShadow: "0 4px 24px rgba(0,0,0,0.4)" }}>
+    <div style={{ background: theme === "light" ? "#e8eef5" : "#0d1520", border: `2px solid ${C.border}`, borderRadius: 16, overflow: "hidden", marginTop: 20, boxShadow: "0 4px 24px rgba(0,0,0,0.4)" }}>
       <div style={{ padding: "16px 22px", borderBottom: `1px solid rgba(255,255,255,0.06)`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ fontWeight: 700, fontSize: 16, color: C.text, letterSpacing: -0.3 }}>Global Regulatory Landscape</div>
       </div>
       <div ref={containerRef}
-        style={{ position: "relative", height: 480, overflow: "hidden", cursor: dragging ? "grabbing" : "grab", background: "#0a0f1a", userSelect: "none" }}
+        style={{ position: "relative", height: 480, overflow: "hidden", cursor: dragging ? "grabbing" : "grab", background: theme === "light" ? "#dde6f0" : "#0a0f1a", userSelect: "none" }}
         onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp} onMouseLeave={() => { handleMouseUp(); setTooltip(null); }}
         onKeyDown={handleKey} tabIndex={0}>
@@ -403,7 +420,7 @@ function WorldHeatmap({ allRegs, scopeMap }) {
         </div>
       </div>
       {tooltip && (
-        <div style={{ position: "fixed", left: tooltip.x + 14, top: tooltip.y - 12, background: "#0f1a2e", border: "1px solid rgba(0,200,150,0.2)", borderRadius: 10, padding: "10px 16px", fontSize: 13, pointerEvents: "none", zIndex: 9999, boxShadow: "0 10px 30px rgba(0,0,0,0.7)", minWidth: 170 }}>
+        <div style={{ position: "fixed", left: tooltip.x + 14, top: tooltip.y - 12, background: theme === "light" ? "#ffffff" : "#0f1a2e", border: theme === "light" ? "1px solid rgba(0,150,100,0.3)" : "1px solid rgba(0,200,150,0.2)", borderRadius: 10, padding: "10px 16px", fontSize: 13, pointerEvents: "none", zIndex: 9999, boxShadow: "0 10px 30px rgba(0,0,0,0.7)", minWidth: 170 }}>
           <div style={{ fontWeight: 700, color: "#fff", marginBottom: 6, fontSize: 14 }}>{tooltip.name}</div>
           {tooltip.data ? <>
             <div style={{ color: "rgba(255,255,255,0.5)" }}>Regulations: <span style={{ color: "#00c896", fontWeight: 600 }}>{tooltip.data.total}</span></div>
@@ -417,7 +434,7 @@ function WorldHeatmap({ allRegs, scopeMap }) {
 }
 
 
-function Dashboard({ allRegs, scopeMap, analysisMap }) {
+function Dashboard({ allRegs, scopeMap, analysisMap, theme }) {
   const byScope = useMemo(() => { const c = { "In Scope": 0, "Out of Scope": 0, Pending: 0 }; allRegs.forEach(r => { const s = scopeMap[r.id] || "Pending"; if (s in c) c[s]++; }); return c; }, [allRegs, scopeMap]);
   const analyzed = Object.keys(analysisMap).length;
   const upcoming = useMemo(() => allRegs.filter(r => { if (!r.deadline) return false; const d = daysUntil(r.deadline); return d !== null && d >= 0 && d <= 180; }).sort((a, b) => new Date(a.deadline) - new Date(b.deadline)).slice(0, 8), [allRegs]);
@@ -468,7 +485,7 @@ function Dashboard({ allRegs, scopeMap, analysisMap }) {
           {Object.entries(byScope).map(([s, cnt]) => { const pct = allRegs.length ? ((cnt / allRegs.length) * 100).toFixed(0) : 0; const col = { "In Scope": C.green, "Out of Scope": C.red, Pending: C.amber }[s]; return (<div key={s} style={{ marginBottom: 14 }}><div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 5 }}><span style={{ color: C.muted }}>{s}</span><span style={{ color: C.text, fontWeight: 600 }}>{cnt} ({pct}%)</span></div><div style={{ height: 8, background: C.panel2, borderRadius: 4, overflow: "hidden" }}><div style={{ height: "100%", background: col, borderRadius: 4, width: `${pct}%`, transition: "width 0.5s ease" }} /></div></div>); })}
         </div>
       </div>
-      <WorldHeatmap allRegs={allRegs} scopeMap={scopeMap} />
+      <WorldHeatmap allRegs={allRegs} scopeMap={scopeMap} theme={theme} />
     </div>
   );
 }
@@ -1576,6 +1593,15 @@ function Calendar({ allRegs, scopeMap }) {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState(() => storage.get("delphi_theme", "dark"));
+  // Keep C in sync with theme - must happen before render
+  C = theme === "light" ? { ...LIGHT_THEME } : { ...DARK_THEME };
+  const G = getGlobalStyles(theme);
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    storage.set("delphi_theme", next);
+  };
   const [authed, setAuthed] = useState(() => storage.get(SESSION_KEY, false));
   const [view, setView] = useState("dashboard");
   const [scopeMap, setScopeMap] = useState(() => storage.get(SCOPE_KEY, {}));
@@ -1724,7 +1750,7 @@ export default function App() {
   const onDelete = useCallback((id) => { setDeletedIds(prev => { const n = [...prev, id]; storage.set("delphi_deleted", n); return n; }); }, []);
   const onDeleteControl = useCallback((id) => { setDeletedControlIds(prev => { const n = [...prev, id]; storage.set("delphi_deleted_controls", n); return n; }); }, []);
 
-  if (!authed) return <Login onLogin={login} />;
+  if (!authed) return <Login onLogin={login} theme={theme} toggleTheme={toggleTheme} />;
 
   const allRegsWithIngested = useMemo(() => {
     // Merge ingested regs that don't already exist in master list
@@ -1733,7 +1759,7 @@ export default function App() {
     const newOnes = ingestedRegs.filter(r => !masterIds.has(r.id) && !masterNames.has(r.name.toLowerCase()));
     return [...allRegs, ...newOnes];
   }, [allRegs, ingestedRegs]);
-  const vp = { allRegs: allRegsWithIngested, scopeMap, analysisMap };
+  const vp = { allRegs: allRegsWithIngested, scopeMap, analysisMap, theme };
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
       <style>{G}</style>
@@ -1746,6 +1772,7 @@ export default function App() {
               {lastSync && <span style={{ fontSize: 12, color: C.muted }}>Synced {lastSync.toLocaleTimeString()}</span>}
             </div>
             <button onClick={syncNow} disabled={syncing} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: "transparent", color: syncing ? C.muted : C.accent, opacity: syncing ? 0.6 : 1 }}>{syncing ? "Syncing..." : "↻ Sync Now"}</button>
+            <button onClick={toggleTheme} style={{ fontSize: 18, padding: "5px 10px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: C.panel2, color: C.text, lineHeight: 1 }} title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}>{theme === "dark" ? "☀️" : "🌙"}</button>
             <button onClick={() => { const v = !isAdmin; setIsAdmin(v); storage.set("delphi_admin", v); }} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${isAdmin ? C.redBorder : C.border}`, background: isAdmin ? C.redBg : "transparent", color: isAdmin ? C.red : C.muted }}>{isAdmin ? "Admin Mode ON" : "Admin Mode"}</button>
           </div>
           {view === "dashboard" && <Dashboard {...vp} />}
