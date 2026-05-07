@@ -5,6 +5,7 @@ const PROXY_URL = "https://delphi-proxy.vercel.app/api/claude";
 const SESSION_KEY = "delphi_auth";
 const SCOPE_KEY = "delphi_scope";
 const ANALYSIS_KEY = "delphi_analyses";
+const URLS_KEY = "delphi_urls";
 const JSONBIN_KEY = "$2a$10$nY52ddUvcB.nOkkqL2Rz5.FLU7LeIE4hyH7O1tOJ7SoHvU7di65Xi";
 const JSONBIN_BIN = "69f39261856a6821898fd552";
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN}`;
@@ -536,16 +537,26 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
   );
 }
 
-function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComplete, initialRegId, onAnalyzeDone }) {
+function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComplete, initialRegId, onAnalyzeDone, savedUrls: externalUrls, onSaveUrls }) {
   const [selected, setSelected] = useState(initialRegId || "");
   const [searchQ, setSearchQ] = useState(""); const [showDropdown, setShowDropdown] = useState(false);
   const [loading, setLoading] = useState(false); const [error, setError] = useState(""); const [result, setResult] = useState(null);
   // File upload state
   const [uploadedFile, setUploadedFile] = useState(null); const [fileContent, setFileContent] = useState("");
-  // URL management state
-  const [urls, setUrls] = useState(() => storage.get("delphi_urls", []));
+  // URL management state - use external persistent state if provided
+  const [localUrls, setLocalUrls] = useState(() => storage.get("delphi_urls", []));
+  const urls = externalUrls || localUrls;
+  const setUrls = onSaveUrls || ((list) => { setLocalUrls(list); storage.set("delphi_urls", list); });
   const [newUrl, setNewUrl] = useState(""); const [editingUrl, setEditingUrl] = useState(null); const [editVal, setEditVal] = useState("");
-  const [crawling, setCrawling] = useState(null); const [urlResults, setUrlResults] = useState({});
+  const [crawling, setCrawling] = useState(null);
+  const [urlResults, setUrlResults] = useState(() => {
+    // Restore persisted scan results from saved URLs
+    const init = {};
+    (externalUrls || storage.get("delphi_urls", [])).forEach(u => {
+      if (u.scanResult) init[u.id] = u.scanResult;
+    });
+    return init;
+  });
   const [activeTab, setActiveTab] = useState("regulation"); // regulation | file | url
 
   const reg = allRegs.find(r => r.id === selected);
@@ -555,61 +566,123 @@ function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComp
   const selectReg = (id) => { setSelected(id); setSearchQ(""); setShowDropdown(false); };
   const inScopeIds = useMemo(() => new Set(Object.entries(scopeMap).filter(([, v]) => v === "In Scope").map(([k]) => k)), [scopeMap]);
 
-  const saveUrls = (newList) => { setUrls(newList); storage.set("delphi_urls", newList); };
+  const saveUrls = (newList) => setUrls(newList);
   const addUrl = () => {
     if (!newUrl.trim()) return;
     const u = newUrl.trim().startsWith("http") ? newUrl.trim() : "https://" + newUrl.trim();
     saveUrls([...urls, { id: Date.now(), url: u, label: u, added: new Date().toISOString() }]);
     setNewUrl("");
   };
-  const deleteUrl = (id) => saveUrls(urls.filter(u => u.id !== id));
+  const deleteUrl = (id) => {
+    setUrlResults(prev => { const n = {...prev}; delete n[id]; return n; });
+    saveUrls(urls.filter(u => u.id !== id));
+  };
   const startEdit = (u) => { setEditingUrl(u.id); setEditVal(u.label); };
   const saveEdit = (id) => { saveUrls(urls.map(u => u.id === id ? { ...u, label: editVal } : u)); setEditingUrl(null); };
 
   const crawlUrl = async (urlObj) => {
     setCrawling(urlObj.id);
-    setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "loading", summary: "Fetching page content..." } }));
+    // Update URL entry to show scanning status (persisted)
+    const updatedWithStatus = urls.map(u => u.id === urlObj.id ? { ...u, scanStatus: "scanning", lastScanned: new Date().toISOString() } : u);
+    setUrls(updatedWithStatus);
+    setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "loading", summary: "Step 1/3: Fetching page and identifying regulations..." } }));
+
     try {
-      // Step 1: Fetch the page content via proxy (web_search tool enables browsing)
-      const fetchRes = await fetch(PROXY_URL, {
+      // Step 1: Scan the root URL and find regulations + hyperlinks
+      const step1Res = await fetch(PROXY_URL, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-5", max_tokens: 4000,
           tools: [{ type: "web_search_20250305", name: "web_search" }],
-          messages: [{ role: "user", content: `You are a regulatory compliance analyst. Search for and analyze the content at this URL: ${urlObj.url}
+          messages: [{ role: "user", content: `You are a regulatory compliance analyst. Search for and analyze: ${urlObj.url}
 
-Your task:
-1. Search for the page content and any regulations referenced on it
-2. Identify all specific regulations, laws, or compliance requirements mentioned
-3. For each regulation found, extract: name, official reference/citation, jurisdiction, regulatory domain, and key obligations summary
+TASK:
+1. Fetch and read the content at this URL
+2. Identify all regulations, laws, directives, or compliance requirements mentioned
+3. Find all hyperlinks on the page that point to specific regulation documents (look for links containing words like: regulation, directive, law, act, rule, compliance, guidance, circular, notice)
+4. For each regulation found directly on the page OR linked from the page, extract full details
 
-Respond ONLY with this JSON (no markdown, no backticks):
-{"type":"regulation|site","siteDescription":"one sentence about what this page/site is","regulations":[{"name":"Full regulation name","reference":"Official citation e.g. EU 2016/679","jurisdiction":"Country or region","domain":"e.g. Data Privacy, Financial Services, AML","summary":"2-3 sentence description of key obligations","effectiveDate":"YYYY-MM-DD or empty","deadline":"YYYY-MM-DD or empty"}]}
+Return ONLY this JSON (no markdown):
+{"type":"regulation|site","siteDescription":"what this page is about","regulations":[{"name":"Full name","reference":"Official citation","jurisdiction":"Country/region","domain":"e.g. Data Privacy","summary":"Key obligations in 2-3 sentences","effectiveDate":"YYYY-MM-DD or empty","deadline":"YYYY-MM-DD or empty","sourceUrl":"direct URL to this specific regulation if found"}],"regulationLinks":["url1","url2","url3"]}
 
-If this is a single regulation document, set type to "regulation". If it is a regulatory body website with multiple regulations, set type to "site". Always return at least one regulation if any compliance content is found.` }]
+regulationLinks should contain up to 10 URLs from the page that likely lead to specific regulation documents. Always populate regulations with whatever you find directly on the page first.` }]
         })
       });
-      const data = await fetchRes.json();
-      // Extract text from response (may include tool use blocks)
-      const textBlock = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
-      const clean = textBlock.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
-      let parsed;
-      try {
-        parsed = JSON.parse(clean);
-      } catch {
-        const m = clean.match(/\{[\s\S]*\}/);
-        try { parsed = m ? JSON.parse(m[0]) : null; } catch { parsed = null; }
+      const d1 = await step1Res.json();
+      const t1 = (d1.content || []).filter(b => b.type === "text").map(b => b.text).join("").replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/,"").trim();
+      let parsed1;
+      try { parsed1 = JSON.parse(t1); } catch { const m = t1.match(/\{[\s\S]*\}/); try { parsed1 = m ? JSON.parse(m[0]) : null; } catch { parsed1 = null; } }
+
+      if (!parsed1) {
+        setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "error", summary: "Could not parse response. Try a more specific regulation URL." } }));
+        setCrawling(null); return;
       }
-      if (parsed && (parsed.regulations?.length > 0 || parsed.siteDescription)) {
-        setUrlResults(prev => ({ ...prev, [urlObj.id]: parsed }));
-      } else {
-        setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "error", summary: "Could not parse regulatory content from this URL. Try a more specific regulation URL." } }));
+
+      // Show initial results immediately
+      setUrlResults(prev => ({ ...prev, [urlObj.id]: { ...parsed1, crawling: true, summary: `Found ${parsed1.regulations?.length || 0} regulations. Crawling ${parsed1.regulationLinks?.length || 0} linked pages...` } }));
+
+      // Step 2: Deep crawl linked regulation pages
+      const links = (parsed1.regulationLinks || []).slice(0, 6); // max 6 deep links
+      let allRegsFound = [...(parsed1.regulations || [])];
+
+      if (links.length > 0) {
+        setUrlResults(prev => ({ ...prev, [urlObj.id]: { ...parsed1, crawling: true, summary: `Step 2/3: Deep crawling ${links.length} regulation links...` } }));
+
+        const deepRes = await fetch(PROXY_URL, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-5", max_tokens: 4000,
+            tools: [{ type: "web_search_20250305", name: "web_search" }],
+            messages: [{ role: "user", content: `You are a regulatory compliance analyst. I need you to fetch and analyze each of these regulation URLs and extract full compliance details from each one:
+
+${links.map((l, i) => `${i + 1}. ${l}`).join("
+")}
+
+For each URL, fetch the content and extract the regulation details. Return ONLY this JSON:
+{"regulations":[{"name":"Full regulation name","reference":"Official citation","jurisdiction":"Country/region","domain":"Regulatory domain","summary":"Key obligations 2-3 sentences","effectiveDate":"YYYY-MM-DD or empty","deadline":"YYYY-MM-DD or empty","sourceUrl":"the URL you fetched"}]}
+
+Include ALL regulations found across all URLs. Deduplicate if the same regulation appears in multiple links.` }]
+          })
+        });
+
+        const d2 = await deepRes.json();
+        const t2 = (d2.content || []).filter(b => b.type === "text").map(b => b.text).join("").replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/,"").trim();
+        let parsed2;
+        try { parsed2 = JSON.parse(t2); } catch { const m = t2.match(/\{[\s\S]*\}/); try { parsed2 = m ? JSON.parse(m[0]) : null; } catch { parsed2 = null; } }
+        if (parsed2?.regulations?.length > 0) {
+          // Merge, deduplicate by reference
+          const existing = new Set(allRegsFound.map(r => r.reference));
+          parsed2.regulations.forEach(r => { if (!existing.has(r.reference)) { allRegsFound.push(r); existing.add(r.reference); } });
+        }
       }
+
+      // Step 3: Final result
+      const finalResult = {
+        type: parsed1.type,
+        siteDescription: parsed1.siteDescription,
+        regulations: allRegsFound,
+        regulationLinks: links,
+        crawledAt: new Date().toISOString(),
+        crawling: false,
+      };
+
+      setUrlResults(prev => ({ ...prev, [urlObj.id]: finalResult }));
+
+      // Persist scan results alongside the URL
+      const finalUrls = urls.map(u => u.id === urlObj.id
+        ? { ...u, scanStatus: "done", lastScanned: new Date().toISOString(), scanResult: finalResult }
+        : u
+      );
+      setUrls(finalUrls);
+
     } catch (e) {
       setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "error", summary: e.message } }));
+      const errUrls = urls.map(u => u.id === urlObj.id ? { ...u, scanStatus: "error" } : u);
+      setUrls(errUrls);
     }
     setCrawling(null);
   };
+
 
   // Run full analysis on a regulation found via URL scan
   const analyzeScannedReg = async (scannedReg) => {
@@ -865,7 +938,11 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                         <>
                           <div style={{ fontSize: 14, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.label !== u.url ? u.label : ""}</div>
                           <div style={{ fontSize: 12, color: C.indigo, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: u.label !== u.url ? 2 : 0 }}>{u.url}</div>
-                          <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>Added {new Date(u.added).toLocaleDateString()}</div>
+                          <div style={{ display: "flex", gap: 12, marginTop: 4, alignItems: "center" }}>
+                            <span style={{ fontSize: 11, color: C.muted }}>Added {new Date(u.added).toLocaleDateString()}</span>
+                            {u.lastScanned && <span style={{ fontSize: 11, color: C.muted }}>· Scanned {new Date(u.lastScanned).toLocaleDateString()}</span>}
+                            {u.scanResult?.regulations?.length > 0 && <span style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>· {u.scanResult.regulations.length} regulations found</span>}
+                          </div>
                         </>
                       )}
                     </div>
@@ -877,15 +954,22 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                   </div>
                   {res && (
                     <div style={{ background: C.panel2, borderRadius: 9, padding: 14, marginTop: 8 }}>
-                      {res.type === "loading" ? (
-                        <div style={{ color: C.muted, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}><span className="spin" style={{ display: "inline-block", width: 12, height: 12, border: `2px solid ${C.accent}`, borderTopColor: "transparent", borderRadius: "50%" }}/>Scanning URL and identifying regulations...</div>
+                      {(res.type === "loading" || res.crawling) ? (
+                        <div style={{ color: C.muted, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+                          <span className="spin" style={{ display: "inline-block", width: 12, height: 12, border: `2px solid ${C.accent}`, borderTopColor: "transparent", borderRadius: "50%" }}/>
+                          {res.summary || "Scanning..."}
+                        </div>
                       ) : res.type === "error" ? (
                         <div style={{ color: C.red, fontSize: 13 }}>Scan error: {res.summary}</div>
                       ) : (
                         <>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>
-                            {res.type === "regulation" ? "📋 Regulation Document" : "🌐 Regulatory Site"} — {res.regulations?.length || 0} regulation(s) identified
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                              {res.type === "regulation" ? "📋 Regulation Document" : "🌐 Regulatory Site"} — {res.regulations?.length || 0} regulation(s) found
+                            </div>
+                            {res.crawledAt && <div style={{ fontSize: 11, color: C.muted }}>Deep crawled {new Date(res.crawledAt).toLocaleString()}</div>}
                           </div>
+                          {res.regulationLinks?.length > 0 && <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>Followed {res.regulationLinks.length} regulation links during deep crawl.</div>}
                           {res.siteDescription && <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>{res.siteDescription}</div>}
                           {res.regulations?.map((r, i) => (
                             <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", marginBottom: 8 }}>
@@ -1135,6 +1219,8 @@ export default function App() {
   const [deletedControlIds, setDeletedControlIds] = useState(() => storage.get("delphi_deleted_controls", []));
   const [isAdmin, setIsAdmin] = useState(() => storage.get("delphi_admin", false));
   const [analyzeRegId, setAnalyzeRegId] = useState(null);
+  const [savedUrls, setSavedUrls] = useState(() => storage.get(URLS_KEY, []));
+  const savePersistentUrls = useCallback((newList) => { setSavedUrls(newList); storage.set(URLS_KEY, newList); jbSet(URLS_KEY, newList); }, []);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
 
@@ -1181,6 +1267,7 @@ export default function App() {
       const rec = await jbGet();
       if (rec.delphi_scope && Object.keys(rec.delphi_scope).length > 0) { setScopeMap({ ...rec.delphi_scope }); storage.set(SCOPE_KEY, rec.delphi_scope); }
       if (rec.delphi_analyses && Object.keys(rec.delphi_analyses).length > 0) { setAnalysisMap({ ...rec.delphi_analyses }); storage.set(ANALYSIS_KEY, rec.delphi_analyses); }
+        if (rec.delphi_urls) { setSavedUrls(rec.delphi_urls); storage.set(URLS_KEY, rec.delphi_urls); }
       setLastSync(new Date());
     } catch { }
     setSyncing(false);
@@ -1211,7 +1298,7 @@ export default function App() {
           </div>
           {view === "dashboard" && <Dashboard {...vp} />}
           {view === "inventory" && <Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin} onAnalyzeClick={(id) => { setAnalyzeRegId(id); setView("analyze"); }} />}
-          {view === "analyze" && <Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={() => setAnalyzeRegId(null)} />}
+          {view === "analyze" && <Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={() => setAnalyzeRegId(null)} savedUrls={savedUrls} onSaveUrls={savePersistentUrls} />}
           {view === "controls" && <Controls {...vp} isAdmin={isAdmin} onDeleteControl={onDeleteControl} deletedControlIds={deletedControlIds} />}
           {view === "timeline" && <Timeline {...vp} />}
           {view === "calendar" && <Calendar {...vp} />}
