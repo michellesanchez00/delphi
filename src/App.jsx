@@ -229,63 +229,71 @@ function WorldHeatmap({ allRegs, scopeMap }) {
     return [x, Math.max(0, Math.min(H, y))];
   }, []);
 
-  // Decode topojson arcs into canvas paths
+  const ISO3MAP = {"840":"USA","276":"DEU","250":"FRA","826":"GBR","392":"JPN","156":"CHN",
+    "356":"IND","036":"AUS","124":"CAN","076":"BRA","710":"ZAF","566":"NGA","702":"SGP",
+    "344":"HKG","784":"ARE","682":"SAU","372":"IRL","528":"NLD","756":"CHE","380":"ITA",
+    "724":"ESP","752":"SWE","578":"NOR","208":"DNK","056":"BEL","040":"AUT","616":"POL",
+    "203":"CZE","484":"MEX","032":"ARG","152":"CHL","170":"COL","410":"KOR","158":"TWN",
+    "360":"IDN","458":"MYS","764":"THA","608":"PHL","554":"NZL","376":"ISR","792":"TUR",
+    "818":"EGY","404":"KEN","288":"GHA","504":"MAR"};
+
+  // Draw topojson features on canvas
   const drawTopoFeatures = useCallback((ctx, topo) => {
-    if (!topo?.objects?.countries?.geometries) return;
-    const { scale, translate } = topo.transform || { scale: [1,1], translate: [0,0] };
-    const decodeArc = (arcIdx) => {
-      const arc = arcIdx < 0 ? [...topo.arcs[~arcIdx]].reverse() : topo.arcs[arcIdx];
+    if (!topo?.objects?.countries?.geometries || !topo.arcs || !topo.transform) return;
+    const kx = topo.transform.scale[0];
+    const ky = topo.transform.scale[1];
+    const tx = topo.transform.translate[0];
+    const ty = topo.transform.translate[1];
+
+    // Pre-decode all arcs into projected [x,y] arrays
+    const projectedArcs = topo.arcs.map(arc => {
       let ax = 0, ay = 0;
       return arc.map(([dx, dy]) => {
         ax += dx; ay += dy;
-        const lon = ax * scale[0] + translate[0];
-        const lat = ay * scale[1] + translate[1];
-        return project([lon, lat]);
+        return project([ax * kx + tx, ay * ky + ty]);
       });
-    };
+    });
 
     topo.objects.countries.geometries.forEach(geom => {
-      // Get numeric id -> iso3
-      const numId = String(geom.id || "").padStart(3, "0");
-      const iso3Map = {"840":"USA","276":"DEU","250":"FRA","826":"GBR","392":"JPN","156":"CHN",
-        "356":"IND","036":"AUS","124":"CAN","076":"BRA","710":"ZAF","566":"NGA","702":"SGP",
-        "344":"HKG","784":"ARE","682":"SAU","372":"IRL","528":"NLD","756":"CHE","380":"ITA",
-        "724":"ESP","752":"SWE","578":"NOR","208":"DNK","056":"BEL","040":"AUT","616":"POL",
-        "203":"CZE","484":"MEX","032":"ARG","152":"CHL","170":"COL","410":"KOR","158":"TWN",
-        "360":"IDN","458":"MYS","764":"THA","608":"PHL","554":"NZL","376":"ISR","792":"TUR",
-        "818":"EGY","404":"KEN","288":"GHA","504":"MAR"};
-      const iso3 = iso3Map[numId] || "";
+      const numId = String(geom.id ?? "").padStart(3, "0");
+      const iso3 = ISO3MAP[numId] || "";
       const data = dataByIso3[iso3];
 
-      // Color: teal intensity based on regulation count
       let fill, stroke;
       if (data) {
         const intensity = Math.min(1, data.total / maxCount);
         const r = Math.round(8 + intensity * 4);
-        const g = Math.round(28 + intensity * 172);
-        const b = Math.round(45 + intensity * 135);
+        const g = Math.round(30 + intensity * 170);
+        const b = Math.round(48 + intensity * 130);
         fill = `rgb(${r},${g},${b})`;
-        stroke = "rgba(0,220,180,0.2)";
+        stroke = "rgba(0,200,160,0.25)";
       } else {
-        fill = "#111827";
-        stroke = "#1c2a3a";
+        fill = "#111c2e";
+        stroke = "#1a2a3e";
       }
 
       ctx.fillStyle = fill;
       ctx.strokeStyle = stroke;
-      ctx.lineWidth = 0.4;
+      ctx.lineWidth = 0.35;
 
-      const rings = geom.type === "Polygon" ? geom.arcs : geom.type === "MultiPolygon" ? geom.arcs.flat() : [];
-      rings.forEach(ring => {
-        ctx.beginPath();
+      const drawRing = (ring) => {
+        let first = true;
         ring.forEach(arcIdx => {
-          const pts = decodeArc(arcIdx);
-          pts.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
+          const pts = arcIdx < 0 ? [...projectedArcs[~arcIdx]].reverse() : projectedArcs[arcIdx];
+          pts.forEach(([x, y], i) => {
+            if (first && i === 0) { ctx.moveTo(x, y); first = false; }
+            else ctx.lineTo(x, y);
+          });
         });
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-      });
+      };
+
+      if (geom.type === "Polygon") {
+        geom.arcs.forEach(ring => { ctx.beginPath(); drawRing(ring); ctx.closePath(); ctx.fill(); ctx.stroke(); });
+      } else if (geom.type === "MultiPolygon") {
+        geom.arcs.forEach(polygon => {
+          polygon.forEach(ring => { ctx.beginPath(); drawRing(ring); ctx.closePath(); ctx.fill(); ctx.stroke(); });
+        });
+      }
     });
   }, [geoData, dataByIso3, maxCount, project]);
 
