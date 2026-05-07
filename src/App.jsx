@@ -257,16 +257,18 @@ function WorldHeatmap({ allRegs, scopeMap, theme }) {
       });
     });
 
-    // Build path string from ring
+    // Build path string from ring - M once at start, L everywhere else
     const ringToPath = (ring) => {
-      let d = "";
+      const allPts = [];
       ring.forEach(arcIdx => {
         const pts = arcIdx < 0 ? [...decodedArcs[~arcIdx]].reverse() : decodedArcs[arcIdx];
-        pts.forEach(([x, y], i) => {
-          d += (d === "" || (arcIdx >= 0 && i === 0) ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+        // Skip first point of each arc after the first (it's the same as the last of the previous)
+        pts.forEach((pt, i) => {
+          if (allPts.length === 0 || i > 0) allPts.push(pt);
         });
       });
-      return d + "Z";
+      if (allPts.length === 0) return "";
+      return "M" + allPts.map(([x, y]) => x.toFixed(1) + "," + y.toFixed(1)).join("L") + "Z";
     };
 
     return geoData.objects.countries.geometries.map(geom => {
@@ -434,6 +436,62 @@ function WorldHeatmap({ allRegs, scopeMap, theme }) {
 }
 
 
+function TopControlsChart({ allRegs, scopeMap }) {
+  const inScopeIds = useMemo(() => new Set(Object.entries(scopeMap).filter(([,v]) => v === "In Scope").map(([k]) => k)), [scopeMap]);
+  const controlFreq = useMemo(() => {
+    const counts = {};
+    CONTROLS_LIBRARY.forEach(ctrl => {
+      const inScopeCount = ctrl.regulations.filter(rId => inScopeIds.has(rId)).length;
+      if (inScopeCount > 0) counts[ctrl.title] = { count: inScopeCount, category: ctrl.category, id: ctrl.controlId };
+    });
+    return Object.entries(counts).sort((a,b) => b[1].count - a[1].count).slice(0, 12);
+  }, [inScopeIds]);
+
+  const maxFreq = controlFreq[0]?.[1]?.count || 1;
+  const catColors = { "Data Privacy": C.indigo, "Financial Crime": C.amber, "Cyber Security": C.blue, "Capital Markets": C.green, "ESG": "#34d399", "Insurance": "#a78bfa", "Operations": "#f87171", "Governance": "#60a5fa" };
+
+  if (inScopeIds.size === 0) return null;
+
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px", marginTop: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 18 }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Most Frequently Mandated Controls</div>
+          <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>Controls required by the most in-scope regulations</div>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted }}>{controlFreq.length} controls shown</div>
+      </div>
+      {controlFreq.length === 0 ? (
+        <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "24px 0" }}>No in-scope regulations — set scope in the Inventory tab</div>
+      ) : (
+        <div>
+          {controlFreq.map(([title, { count, category }]) => {
+            const col = catColors[category] || C.accent;
+            const pct = (count / maxFreq) * 100;
+            return (
+              <div key={title} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "75%" }}>{title}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                      <span style={{ fontSize: 11, color: col, background: `${col}18`, border: `1px solid ${col}30`, borderRadius: 4, padding: "1px 7px", fontWeight: 600 }}>{category}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: C.text, minWidth: 20, textAlign: "right" }}>{count}</span>
+                    </div>
+                  </div>
+                  <div style={{ height: 7, background: C.panel2, borderRadius: 4, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${pct}%`, background: `linear-gradient(to right, ${col}aa, ${col})`, borderRadius: 4, transition: "width 0.6s ease" }} />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function Dashboard({ allRegs, scopeMap, analysisMap, theme }) {
   const byScope = useMemo(() => { const c = { "In Scope": 0, "Out of Scope": 0, Pending: 0 }; allRegs.forEach(r => { const s = scopeMap[r.id] || "Pending"; if (s in c) c[s]++; }); return c; }, [allRegs, scopeMap]);
   const analyzed = Object.keys(analysisMap).length;
@@ -450,8 +508,8 @@ function Dashboard({ allRegs, scopeMap, analysisMap, theme }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 24 }}>
         <StatCard label="Total Regulations" value={allRegs.length} sub={`${analyzed} analyzed`} color="indigo" />
-        <StatCard label="Jurisdictions" value={jurisdictionCount} sub="Regulatory regions" color="blue" />
-        <StatCard label="Countries" value={countryCount} sub="Nations covered" color="emerald" />
+        <StatCard label="Jurisdictions" value={jurisdictionCount} sub="Regulatory regions" color="indigo" />
+        <StatCard label="Countries" value={countryCount} sub="Nations covered" color="indigo" />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
@@ -486,14 +544,17 @@ function Dashboard({ allRegs, scopeMap, analysisMap, theme }) {
         </div>
       </div>
       <WorldHeatmap allRegs={allRegs} scopeMap={scopeMap} theme={theme} />
+      <TopControlsChart allRegs={allRegs} scopeMap={scopeMap} />
     </div>
   );
 }
 
 function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, isAdmin, onAnalyzeClick, ingestedRegs, onUpdateIngested, onClearChanges }) {
   const [search, setSearch] = useState(""); const [domain, setDomain] = useState("All"); const [region, setRegion] = useState("All"); const [scope, setScope] = useState("All"); const [page, setPage] = useState(1); const [delConfirm, setDelConfirm] = useState(null); const PER = 20;
+  const [sortField, setSortField] = useState("name"); const [sortDir, setSortDir] = useState("asc");
+  const toggleSort = (field) => { if (sortField === field) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortField(field); setSortDir("asc"); } };
   const [editingReg, setEditingReg] = useState(null); const [editFields, setEditFields] = useState({});
-  const filtered = useMemo(() => { let list = [...allRegs]; if (search) { const q = search.toLowerCase(); list = list.filter(r => r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || (r.tags || []).some(t => t.toLowerCase().includes(q))); } if (domain !== "All") list = list.filter(r => r.domain === domain); if (region !== "All") list = list.filter(r => r.region === region); if (scope !== "All") list = list.filter(r => (scopeMap[r.id] || "Pending") === scope); return list; }, [allRegs, search, domain, region, scope, scopeMap]);
+  const filtered = useMemo(() => { let list = [...allRegs]; if (search) { const q = search.toLowerCase(); list = list.filter(r => r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || (r.tags || []).some(t => t.toLowerCase().includes(q))); } if (domain !== "All") list = list.filter(r => r.domain === domain); if (region !== "All") list = list.filter(r => r.region === region); if (scope !== "All") list = list.filter(r => (scopeMap[r.id] || "Pending") === scope); list.sort((a,b) => { let av = a[sortField]||""; let bv = b[sortField]||""; if (sortField==="deadline") { av=av||"9999"; bv=bv||"9999"; } return sortDir==="asc" ? av.localeCompare(bv) : bv.localeCompare(av); }); return list; }, [allRegs, search, domain, region, scope, scopeMap, sortField, sortDir]);
   const pages = Math.ceil(filtered.length / PER); const paged = filtered.slice((page - 1) * PER, page * PER);
   const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "10px 14px", fontSize: 14, outline: "none" };
   const th = { padding: "13px 14px", fontSize: 12, fontWeight: 700, color: C.muted, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: "0.05em" };
@@ -519,9 +580,15 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
           <table>
             <thead style={{ background: C.panel2 }}>
               <tr>
-                <th style={{ ...th, width: 90 }}>ID</th><th style={th}>Regulation</th><th style={{ ...th, width: 80 }}>Region</th>
-                <th style={{ ...th, width: 140 }}>Domain</th><th style={{ ...th, width: 100 }}>Status</th><th style={{ ...th, width: 110 }}>Scope</th>
-                <th style={{ ...th, width: 140 }}>Deadline</th><th style={{ ...th, width: 200 }}>Set Scope</th><th style={{ ...th, width: 110 }}>Actions</th>
+                <th style={{ ...th, width: 90, cursor:"pointer" }} onClick={()=>toggleSort("id")}>ID {sortField==="id"?(sortDir==="asc"?"↑":"↓"):"⇅"}</th>
+                <th style={{ ...th, cursor:"pointer" }} onClick={()=>toggleSort("name")}>Regulation {sortField==="name"?(sortDir==="asc"?"↑":"↓"):"⇅"}</th>
+                <th style={{ ...th, width: 90, cursor:"pointer" }} onClick={()=>toggleSort("region")}>Region {sortField==="region"?(sortDir==="asc"?"↑":"↓"):"⇅"}</th>
+                <th style={{ ...th, width: 140, cursor:"pointer" }} onClick={()=>toggleSort("domain")}>Domain {sortField==="domain"?(sortDir==="asc"?"↑":"↓"):"⇅"}</th>
+                <th style={{ ...th, width: 100 }}>Status</th>
+                <th style={{ ...th, width: 110 }}>Scope</th>
+                <th style={{ ...th, width: 140, cursor:"pointer" }} onClick={()=>toggleSort("deadline")}>Deadline {sortField==="deadline"?(sortDir==="asc"?"↑":"↓"):"⇅"}</th>
+                <th style={{ ...th, width: 200 }}>Set Scope</th>
+                <th style={{ ...th, width: 110 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -980,7 +1047,84 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
     finally { setLoading(false); }
   };
 
-  const card = { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22, marginBottom: 16 };
+
+  // Shared regulation info + marsh scope panel
+  const RegInfoPanel = ({ regData, regKey, currentScope, onScopeChg, analysisResult }) => {
+    if (!regData) return null;
+    const marshScope = MARSH_ENTITIES.map(e => ({ entity: e, inScope: (regData.marshEntities || []).includes(e) }));
+    const days = daysUntil(regData.deadline);
+    return (
+      <div>
+        {/* Regulation details card */}
+        <div style={{ background: C.panel2, borderRadius: 10, padding: 16, marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontWeight: 700, color: C.text, fontSize: 15 }}>{regData.name}</div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>
+                {[regData.reference, regData.region, regData.domain].filter(Boolean).join(" · ")}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {regData.status && <Badge text={analysisResult ? "Analyzed" : regData.status} style={statusStyle(analysisResult ? "Analyzed" : regData.status)} />}
+              <Badge text={currentScope} style={scopeStyle(currentScope)} />
+            </div>
+          </div>
+          {regData.summary && <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.7, marginBottom: 10 }}>{regData.summary}</p>}
+          {regData.deadline && (
+            <div style={{ fontSize: 13, color: urgencyColor(days), marginBottom: 10 }}>
+              Deadline: {formatDeadline(regData.deadline)} ({days} days)
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 13, color: C.muted }}>Scope:</span>
+            <select value={currentScope} onChange={e => onScopeChg(regKey, e.target.value)}
+              style={{ background: C.panel, border: `1px solid ${C.border}`, color: C.text, borderRadius: 7, padding: "5px 10px", fontSize: 13, cursor: "pointer", outline: "none" }}>
+              <option>Pending</option><option>In Scope</option><option>Out of Scope</option>
+            </select>
+          </div>
+        </div>
+        {/* Marsh Entity Scope */}
+        <div style={{ background: C.panel2, borderRadius: 10, padding: 16, marginBottom: 14, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>◈ Marsh Entity Scope</div>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>Based on regulation's tagged entities. Run analysis for AI rationale.</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.green, fontWeight: 700, marginBottom: 8 }}>
+                ● In Scope ({marshScope.filter(e => e.inScope).length})
+              </div>
+              {marshScope.filter(e => e.inScope).map(e => {
+                const ai = analysisResult?.marshScope?.find(x => x.entity === e.entity);
+                return (
+                  <div key={e.entity} style={{ background: C.greenBg, border: `1px solid ${C.greenBorder}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: "9px 12px", marginBottom: 6 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{e.entity}</div>
+                    {ai?.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{ai.reason}</div>}
+                  </div>
+                );
+              })}
+              {marshScope.filter(e => e.inScope).length === 0 && <div style={{ fontSize: 13, color: C.muted, fontStyle: "italic" }}>None tagged</div>}
+            </div>
+            <div>
+              <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, fontWeight: 700, marginBottom: 8 }}>
+                ○ Out of Scope ({marshScope.filter(e => !e.inScope).length})
+              </div>
+              {marshScope.filter(e => !e.inScope).map(e => {
+                const ai = analysisResult?.marshScope?.find(x => x.entity === e.entity);
+                return (
+                  <div key={e.entity} style={{ background: C.panel, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", marginBottom: 6, opacity: 0.65 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.muted }}>{e.entity}</div>
+                    {ai?.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{ai.reason}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, fontStyle: "italic" }}>Always validate with legal counsel.</div>
+        </div>
+      </div>
+    );
+  };
+
+    const card = { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22, marginBottom: 16 };
   const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "11px 14px", fontSize: 14, outline: "none" };
   const marshScopeFromReg = reg ? MARSH_ENTITIES.map(e => ({ entity: e, inScope: (reg.marshEntities || []).includes(e) })) : [];
   const canAnalyze = (activeTab === "regulation" && selected) || (activeTab === "file" && uploadedFile);
@@ -1023,40 +1167,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
               </div>
             )}
           </div>
-          {reg && (
-            <div style={{ background: C.panel2, borderRadius: 10, padding: 16, marginBottom: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
-                <div><div style={{ fontWeight: 700, color: C.text, fontSize: 15 }}>{reg.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{reg.reference} · {reg.region} · {reg.domain}</div></div>
-                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}><Badge text={analysisMap[selected] ? "Analyzed" : reg.status} style={statusStyle(analysisMap[selected] ? "Analyzed" : reg.status)} /><Badge text={scopeMap[selected] || "Pending"} style={scopeStyle(scopeMap[selected] || "Pending")} /></div>
-              </div>
-              <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.7, marginBottom: 10 }}>{reg.summary}</p>
-              {reg.deadline && <div style={{ fontSize: 13, color: urgencyColor(daysUntil(reg.deadline)), marginBottom: 10 }}>Deadline: {formatDeadline(reg.deadline)} ({daysUntil(reg.deadline)} days)</div>}
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 13, color: C.muted }}>Scope:</span>
-                <select value={scopeMap[selected] || "Pending"} onChange={e => onScopeChange(selected, e.target.value)} style={{ background: C.panel, border: `1px solid ${C.border}`, color: C.text, borderRadius: 7, padding: "5px 10px", fontSize: 13, cursor: "pointer", outline: "none" }}><option>Pending</option><option>In Scope</option><option>Out of Scope</option></select>
-              </div>
-            </div>
-          )}
-          {/* Marsh Entity Scope Panel */}
-          {reg && (
-            <div style={{ background: C.panel2, borderRadius: 10, padding: 16, marginBottom: 16, border: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>◈ Marsh Entity Scope</div>
-              <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>Based on regulation's tagged entities. Run analysis for AI rationale.</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div>
-                  <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.green, fontWeight: 700, marginBottom: 8 }}>● In Scope ({marshScopeFromReg.filter(e => e.inScope).length})</div>
-                  {marshScopeFromReg.filter(e => e.inScope).map(e => { const ai = result?.marshScope?.find(x => x.entity === e.entity); return (<div key={e.entity} style={{ background: C.greenBg, border: `1px solid ${C.greenBorder}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: "10px 13px", marginBottom: 7 }}><div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{e.entity}</div>{ai?.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{ai.reason}</div>}</div>); })}
-                  {marshScopeFromReg.filter(e => e.inScope).length === 0 && <div style={{ fontSize: 13, color: C.text, fontStyle: "italic" }}>None</div>}
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, fontWeight: 700, marginBottom: 8 }}>○ Out of Scope ({marshScopeFromReg.filter(e => !e.inScope).length})</div>
-                  {marshScopeFromReg.filter(e => !e.inScope).map(e => { const ai = result?.marshScope?.find(x => x.entity === e.entity); return (<div key={e.entity} style={{ background: C.panel, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.border}`, borderRadius: 8, padding: "10px 13px", marginBottom: 7, opacity: 0.65 }}><div style={{ fontSize: 13, fontWeight: 600, color: C.muted }}>{e.entity}</div>{ai?.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{ai.reason}</div>}</div>); })}
-                  {marshScopeFromReg.filter(e => !e.inScope).length === 0 && <div style={{ fontSize: 13, color: C.text, fontStyle: "italic" }}>None</div>}
-                </div>
-              </div>
-              <div style={{ fontSize: 11, color: C.muted, marginTop: 10, fontStyle: "italic" }}>Always validate with legal counsel.</div>
-            </div>
-          )}
+          {reg && <RegInfoPanel regData={reg} regKey={selected} currentScope={scopeMap[selected]||"Pending"} onScopeChg={onScopeChange} analysisResult={result} />}
           <button onClick={analyze} disabled={!canAnalyze || loading} style={{ display: "flex", alignItems: "center", gap: 8, background: C.accent, border: "none", color: "#fff", fontWeight: 700, padding: "11px 24px", borderRadius: 9, fontSize: 15, cursor: canAnalyze && !loading ? "pointer" : "not-allowed", opacity: !canAnalyze || loading ? 0.5 : 1 }}>
             {loading ? <><span className="spin" style={{ display: "inline-block", width: 14, height: 14, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%" }} />Analyzing...</> : "⚡ Run Analysis"}
           </button>
@@ -1098,16 +1209,12 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
               {uploadedFile && (
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
                   <button onClick={() => { setUploadedFile(null); setFileContent(""); setResult(null); setFileResult(null); }} style={{ fontSize: 12, color: C.muted, background: "transparent", border: "none", cursor: "pointer" }}>× Remove</button>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
-                    <span style={{ fontSize: 13, color: C.muted }}>Scope:</span>
-                    <select value={fileScope} onChange={e => fileKey && onScopeChange(fileKey, e.target.value)}
-                      style={{ background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 7, padding: "5px 10px", fontSize: 13, cursor: "pointer", outline: "none" }}>
-                      <option>Pending</option><option>In Scope</option><option>Out of Scope</option>
-                    </select>
-                    <Badge text={fileScope} style={scopeStyle(fileScope)} />
-                  </div>
                 </div>
               )}
+              {uploadedFile && fileKey && (() => {
+                const fakeReg = { name: uploadedFile.name.replace(/\.[^.]+$/, ""), reference: "", region: "", domain: "", summary: "Uploaded document — run analysis to extract details.", marshEntities: [], deadline: null, status: existingAnalysis ? "Analyzed" : "Pending" };
+                return <RegInfoPanel regData={fakeReg} regKey={fileKey} currentScope={fileScope} onScopeChg={onScopeChange} analysisResult={existingAnalysis} />;
+              })()}
               <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
                 {existingAnalysis ? (
                   <button onClick={() => { setResult(existingAnalysis); setViewingFileResult(uploadedFile?.name); }}
