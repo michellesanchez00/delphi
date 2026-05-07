@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { ComposableMap, Geographies, Geography, ZoomableGroup } from "react-simple-maps";
 import { REGULATIONS, CONTROLS_LIBRARY, DOMAINS, REGIONS, MARSH_ENTITIES } from "./regulatoryData";
 
 const PROXY_URL = "https://delphi-proxy.vercel.app/api/claude";
@@ -73,12 +74,12 @@ function Login({ onLogin }) {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <style>{G}</style>
-      <div style={{ width: "100%", maxWidth: 400 }}>
-        <div style={{ textAlign: "center", marginBottom: 40 }}>
-          <div style={{ fontSize: 36, fontWeight: 900, color: C.text, letterSpacing: -1.5, marginBottom: 4 }}>
+      <div style={{ width: "100%", maxWidth: 520 }}>
+        <div style={{ textAlign: "center", marginBottom: 44 }}>
+          <div style={{ fontSize: 48, fontWeight: 900, color: C.text, letterSpacing: -2, marginBottom: 12, lineHeight: 1 }}>
             <span style={{ color: C.accent }}>D</span>ELPHI
           </div>
-          <div style={{ fontSize: 14, color: C.muted }}>Marsh Regulatory Intelligence Platform</div>
+          <div style={{ fontSize: 24, color: C.muted, fontWeight: 500, lineHeight: 1.35 }}>Document Extraction for Legal/Policy<br/>Harmonization &amp; Implementation</div>
         </div>
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 20, padding: 36 }}>
           <div style={{ marginBottom: 20 }}>
@@ -100,7 +101,7 @@ function Sidebar({ active, onNav, onLogout, totalRegs, inScope }) {
         <div style={{ fontSize: 22, fontWeight: 900, color: C.text, letterSpacing: -0.5 }}>
           <span style={{ color: C.accent }}>D</span>ELPHI
         </div>
-        <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>Marsh Regulatory Intelligence</div>
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>Document Extraction for Legal/<br/>Policy Harmonization &amp; Implementation</div>
       </div>
       <nav style={{ flex: 1, padding: "14px 10px" }}>
         {NAV.map(n => (
@@ -159,16 +160,38 @@ const REGION_COUNTRIES = {
   Africa: ["South Africa", "Nigeria", "Kenya", "Ghana", "Morocco"],
 };
 
+// ISO-3 codes for react-simple-maps geography matching
+const COUNTRY_ISO3 = {
+  "United States":"USA","Germany":"DEU","France":"FRA","United Kingdom":"GBR",
+  "Japan":"JPN","China":"CHN","India":"IND","Australia":"AUS","Canada":"CAN",
+  "Brazil":"BRA","South Africa":"ZAF","Nigeria":"NGA","Singapore":"SGP",
+  "Hong Kong":"HKG","UAE":"ARE","Saudi Arabia":"SAU","Ireland":"IRL",
+  "Netherlands":"NLD","Switzerland":"CHE","Italy":"ITA","Spain":"ESP",
+  "Sweden":"SWE","Norway":"NOR","Denmark":"DNK","Belgium":"BEL",
+  "Austria":"AUT","Poland":"POL","Czech Republic":"CZE","Mexico":"MEX",
+  "Argentina":"ARG","Chile":"CHL","Colombia":"COL","South Korea":"KOR",
+  "Taiwan":"TWN","Indonesia":"IDN","Malaysia":"MYS","Thailand":"THA",
+  "Philippines":"PHL","New Zealand":"NZL","Israel":"ISR","Turkey":"TUR",
+  "Egypt":"EGY","Kenya":"KEN","Ghana":"GHA","Morocco":"MAR",
+};
+
+const GEO_URL = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
+
+// Map ISO numeric (used in world-atlas) to ISO-3
+const ISO_NUM_TO_ALPHA3 = {
+  "840":"USA","276":"DEU","250":"FRA","826":"GBR","392":"JPN","156":"CHN",
+  "356":"IND","036":"AUS","124":"CAN","076":"BRA","710":"ZAF","566":"NGA",
+  "702":"SGP","344":"HKG","784":"ARE","682":"SAU","372":"IRL","528":"NLD",
+  "756":"CHE","380":"ITA","724":"ESP","752":"SWE","578":"NOR","208":"DNK",
+  "056":"BEL","040":"AUT","616":"POL","203":"CZE","484":"MEX","032":"ARG",
+  "152":"CHL","170":"COL","410":"KOR","158":"TWN","360":"IDN","458":"MYS",
+  "764":"THA","608":"PHL","554":"NZL","376":"ISR","792":"TUR","818":"EGY",
+  "404":"KEN","288":"GHA","504":"MAR",
+};
+
 function WorldHeatmap({ allRegs, scopeMap }) {
-  const canvasRef = useRef(null);
-  const containerRef = useRef(null);
-  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
+  const [position, setPosition] = useState({ coordinates: [0, 20], zoom: 1 });
   const [tooltip, setTooltip] = useState(null);
-  const [worldData, setWorldData] = useState(null);
-  const [dragging, setDragging] = useState(false);
-  const dragStart = useRef(null);
-  const transformRef = useRef(transform);
-  transformRef.current = transform;
 
   const countryData = useMemo(() => {
     const map = {};
@@ -183,225 +206,108 @@ function WorldHeatmap({ allRegs, scopeMap }) {
     return map;
   }, [allRegs, scopeMap]);
 
+  // Build lookup by ISO-3
+  const dataByIso3 = useMemo(() => {
+    const m = {};
+    Object.entries(countryData).forEach(([name, data]) => {
+      const iso3 = COUNTRY_ISO3[name];
+      if (iso3) m[iso3] = { ...data, name };
+    });
+    return m;
+  }, [countryData]);
+
   const maxCount = useMemo(() => Math.max(1, ...Object.values(countryData).map(d => d.total)), [countryData]);
 
-  // Load world topojson
-  useEffect(() => {
-    fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
-      .then(r => r.json()).then(setWorldData).catch(() => setWorldData(null));
-  }, []);
-
-  const W = 960, H = 500;
-  const project = ([lat, lng]) => {
-    const x = (lng + 180) * (W / 360);
-    const latRad = (lat * Math.PI) / 180;
-    const mercN = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
-    const y = H / 2 - (W * mercN) / (2 * Math.PI);
-    return [x, Math.max(0, Math.min(H, y))];
+  const getCountryColor = (iso3) => {
+    const data = dataByIso3[iso3];
+    if (!data) return "#111827";
+    const intensity = Math.min(1, data.total / maxCount);
+    // Teal gradient: dark navy → bright teal, matching PACMap style
+    const r = Math.round(10 + intensity * 6);
+    const g = Math.round(30 + intensity * 155);
+    const b = Math.round(50 + intensity * 120);
+    return `rgb(${r},${g},${b})`;
   };
 
-  // Draw on canvas
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, W, H);
+  const getCountryStroke = (iso3) => {
+    const data = dataByIso3[iso3];
+    return data ? "rgba(0,220,180,0.25)" : "#1c2a3a";
+  };
 
-    // Ocean background
-    ctx.fillStyle = "#0c111e";
-    ctx.fillRect(0, 0, W, H);
-
-    // Grid lines
-    ctx.strokeStyle = "#1c2333";
-    ctx.lineWidth = 0.5;
-    [-60, -30, 0, 30, 60].forEach(lat => {
-      const [, y] = project([lat, 0]);
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    });
-    [-150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150].forEach(lng => {
-      const [x] = project([0, lng]);
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-    });
-
-    // Draw land from topojson if loaded
-    if (worldData) {
-      try {
-        // Simple topojson path drawing using arc decoder
-        const topoFeatures = worldData.objects?.countries;
-        if (topoFeatures && worldData.arcs) {
-          const drawArc = (arcIdx) => {
-            const arc = arcIdx < 0 ? [...worldData.arcs[~arcIdx]].reverse() : worldData.arcs[arcIdx];
-            if (!arc || arc.length === 0) return;
-            let x = 0, y = 0;
-            arc.forEach(([dx, dy], i) => {
-              x += dx; y += dy;
-              const scale = worldData.transform?.scale || [1, 1];
-              const translate = worldData.transform?.translate || [0, 0];
-              const lon = x * scale[0] + translate[0];
-              const lat = y * scale[1] + translate[1];
-              const [px, py] = project([lat, lon]);
-              if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-            });
-          };
-          ctx.fillStyle = "#1a2235";
-          ctx.strokeStyle = "#2a3550";
-          ctx.lineWidth = 0.4;
-          const geoms = topoFeatures.geometries || [];
-          geoms.forEach(geom => {
-            ctx.beginPath();
-            const arcsGroups = geom.type === "Polygon" ? geom.arcs : geom.type === "MultiPolygon" ? geom.arcs.flat() : [];
-            arcsGroups.forEach(ring => ring.forEach(arcIdx => drawArc(arcIdx)));
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-          });
-        }
-      } catch (e) { /* silent fallback */ }
-    } else {
-      // Fallback: simple rectangle regions to show something
-      ctx.fillStyle = "#1a2235";
-      ctx.strokeStyle = "#2a3550";
-      ctx.lineWidth = 0.5;
-      const regions = [
-        [-170,-60,60,80], // Americas rough
-        [-15,-35,55,72],  // Europe/Africa rough
-        [25,-10,145,55],  // Asia rough
-        [113,-43,154,-10],// Australia rough
-      ];
-      regions.forEach(([x1,y1,x2,y2]) => {
-        const [px1, py1] = project([y2, x1]);
-        const [px2, py2] = project([y1, x2]);
-        ctx.beginPath();
-        ctx.rect(px1, py1, px2-px1, py2-py1);
-        ctx.fill(); ctx.stroke();
-      });
-    }
-
-    // Draw country bubbles
-    Object.entries(COUNTRY_COORDS).forEach(([country, coords]) => {
-      if (country === "Global") return;
-      const [x, y] = project(coords);
-      const data = countryData[country];
-      if (!data) {
-        ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(99,102,241,0.2)";
-        ctx.fill();
-        return;
-      }
-      const pct = data.total / maxCount;
-      const r = 7 + pct * 26;
-      const inScopePct = data.total > 0 ? data.inScope / data.total : 0;
-      const col = inScopePct > 0.6 ? "#10b981" : inScopePct > 0.2 ? "#f59e0b" : "#6366f1";
-      const colRgb = inScopePct > 0.6 ? "16,185,129" : inScopePct > 0.2 ? "245,158,11" : "99,102,241";
-      // Outer glow ring
-      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(${colRgb},0.12)`; ctx.fill();
-      ctx.strokeStyle = `rgba(${colRgb},0.5)`; ctx.lineWidth = 1.5; ctx.stroke();
-      // Inner filled portion (in-scope fraction)
-      const innerR = Math.max(4, r * 0.65);
-      ctx.beginPath(); ctx.arc(x, y, innerR, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(${colRgb},0.7)`; ctx.fill();
-      // Count label
-      ctx.fillStyle = "#fff";
-      ctx.font = `bold ${Math.max(8, Math.min(11, r * 0.7))}px Inter, sans-serif`;
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(data.total, x, y);
-    });
-  }, [worldData, countryData, maxCount]);
-
-  const getHoveredCountry = useCallback((clientX, clientY) => {
-    const container = containerRef.current;
-    if (!container) return null;
-    const rect = container.getBoundingClientRect();
-    const t = transformRef.current;
-    const canvasX = (clientX - rect.left - t.x) / t.scale;
-    const canvasY = (clientY - rect.top - t.y) / t.scale;
-    let closest = null; let minDist = 30;
-    Object.entries(COUNTRY_COORDS).forEach(([country, coords]) => {
-      const [x, y] = project(coords);
-      const dist = Math.sqrt((canvasX - x) ** 2 + (canvasY - y) ** 2);
-      if (dist < minDist) { minDist = dist; closest = country; }
-    });
-    return closest;
-  }, []);
-
-  const handleWheel = useCallback((e) => {
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.2 : 0.85;
-    setTransform(t => ({ ...t, scale: Math.max(0.6, Math.min(8, t.scale * factor)) }));
-  }, []);
-
-  const handleMouseDown = useCallback((e) => {
-    setDragging(true);
-    dragStart.current = { x: e.clientX - transformRef.current.x, y: e.clientY - transformRef.current.y };
-  }, []);
-
-  const handleMouseMove = useCallback((e) => {
-    if (dragging && dragStart.current) {
-      setTransform(t => ({ ...t, x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y }));
-    }
-    const country = getHoveredCountry(e.clientX, e.clientY);
-    if (country) setTooltip({ country, x: e.clientX, y: e.clientY, data: countryData[country] || null });
-    else setTooltip(null);
-  }, [dragging, getHoveredCountry, countryData]);
-
-  const handleMouseUp = useCallback(() => setDragging(false), []);
-  const handleKey = useCallback((e) => {
-    if (e.key === "Escape") setTransform({ x: 0, y: 0, scale: 1 });
-    if (e.key === "+" || e.key === "=") setTransform(t => ({ ...t, scale: Math.min(8, t.scale * 1.3) }));
-    if (e.key === "-") setTransform(t => ({ ...t, scale: Math.max(0.6, t.scale * 0.8) }));
-  }, []);
+  const handleMoveEnd = useCallback((pos) => setPosition(pos), []);
 
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginTop: 20 }}>
-      <div style={{ padding: "16px 22px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Global Regulation Density</div>
-          <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Bubble size = regulation count · scroll or +/− to zoom · drag to pan · Esc to reset</div>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {!worldData && <span style={{ fontSize: 12, color: C.muted }}>Loading map...</span>}
-          <button onClick={() => setTransform({ x: 0, y: 0, scale: 1 })} style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer" }}>Reset</button>
+    <div style={{ background: "#0d1520", border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginTop: 20 }}>
+      <div style={{ padding: "18px 22px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: C.text, letterSpacing: -0.3 }}>Global Regulatory Landscape</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <button onClick={() => setPosition(p => ({ ...p, zoom: Math.min(8, p.zoom * 1.5) }))}
+            style={{ width: 36, height: 36, borderRadius: 9, border: `1px solid rgba(255,255,255,0.1)`, background: "rgba(255,255,255,0.08)", color: C.text, fontSize: 20, cursor: "pointer", display:"flex", alignItems:"center", justifyContent:"center", lineHeight: 1 }}>+</button>
+          <button onClick={() => setPosition(p => ({ ...p, zoom: Math.max(1, p.zoom * 0.7) }))}
+            style={{ width: 36, height: 36, borderRadius: 9, border: `1px solid rgba(255,255,255,0.1)`, background: "rgba(255,255,255,0.08)", color: C.text, fontSize: 20, cursor: "pointer", display:"flex", alignItems:"center", justifyContent:"center", lineHeight: 1 }}>−</button>
+          <button onClick={() => setPosition({ coordinates: [0, 20], zoom: 1 })}
+            style={{ width: 36, height: 36, borderRadius: 9, border: `1px solid rgba(255,255,255,0.1)`, background: "rgba(255,255,255,0.08)", color: C.muted, fontSize: 13, cursor: "pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>⊡</button>
         </div>
       </div>
-      <div
-        ref={containerRef}
-        style={{ position: "relative", height: 480, overflow: "hidden", cursor: dragging ? "grabbing" : "grab", touchAction: "pan-y", background: "#0c111e" }}
-        onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp} onMouseLeave={() => { handleMouseUp(); setTooltip(null); }}
-        onKeyDown={handleKey} tabIndex={0}
-      >
-        <canvas
-          ref={canvasRef} width={W} height={H}
-          style={{ position: "absolute", transform: `translate(${transform.x}px,${transform.y}px) scale(${transform.scale})`, transformOrigin: "0 0", transition: dragging ? "none" : "transform 0.08s", imageRendering: "crisp-edges" }}
-        />
-        {/* Legend */}
-        <div style={{ position: "absolute", bottom: 14, left: 16, display: "flex", gap: 14, fontSize: 12, color: C.muted, background: "rgba(8,10,15,0.8)", padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}` }}>
-          {[{ col: "#10b981", label: ">60% in scope" }, { col: "#f59e0b", label: "20–60% in scope" }, { col: "#6366f1", label: "<20% in scope" }].map(({ col, label }) => (
-            <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{ width: 11, height: 11, borderRadius: "50%", background: col }} />{label}
-            </div>
-          ))}
-        </div>
-        {/* Zoom controls */}
-        <div style={{ position: "absolute", top: 14, right: 14, display: "flex", flexDirection: "column", gap: 4 }}>
-          {[{ z: "+", label: "+" }, { z: "-", label: "−" }].map(({ z, label }) => (
-            <button key={z} onClick={() => setTransform(t => ({ ...t, scale: z === "+" ? Math.min(8, t.scale * 1.3) : Math.max(0.6, t.scale * 0.8) }))}
-              style={{ width: 30, height: 30, borderRadius: 7, border: `1px solid ${C.border}`, background: "rgba(15,17,23,0.9)", color: C.text, fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>{label}</button>
-          ))}
+      <div style={{ position: "relative", background: "#0a0f1a" }}>
+        <ComposableMap
+          projection="geoMercator"
+          projectionConfig={{ scale: 140, center: [0, 20] }}
+          style={{ width: "100%", height: 480 }}
+        >
+          <ZoomableGroup
+            zoom={position.zoom}
+            center={position.coordinates}
+            onMoveEnd={handleMoveEnd}
+            minZoom={1}
+            maxZoom={8}
+          >
+            <Geographies geography={GEO_URL}>
+              {({ geographies }) =>
+                geographies.map(geo => {
+                  const numId = geo.id?.toString().padStart(3, "0");
+                  const iso3 = ISO_NUM_TO_ALPHA3[numId] || geo.properties?.a3 || "";
+                  const data = dataByIso3[iso3];
+                  const fill = getCountryColor(iso3);
+                  const stroke = getCountryStroke(iso3);
+                  return (
+                    <Geography
+                      key={geo.rsmKey}
+                      geography={geo}
+                      fill={fill}
+                      stroke={stroke}
+                      strokeWidth={data ? 0.6 : 0.3}
+                      style={{
+                        default: { outline: "none" },
+                        hover: { outline: "none", fill: data ? fill.replace("rgb(", "rgba(").replace(")", ",1.0)") : "#1a2d40", cursor: "pointer" },
+                        pressed: { outline: "none" },
+                      }}
+                      onMouseEnter={(e) => { if (!data) return; setTooltip({ name: data.name, x: e.clientX, y: e.clientY, data }); }}
+                      onMouseMove={(e) => { if (!data) return; setTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null); }}
+                      onMouseLeave={() => setTooltip(null)}
+                    />
+                  );
+                })
+              }
+            </Geographies>
+          </ZoomableGroup>
+        </ComposableMap>
+        {/* Gradient legend - bottom center like PACMap */}
+        <div style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", textAlign: "center" }}>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 6 }}>Regulations Tracked</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>0</span>
+            <div style={{ width: 200, height: 8, borderRadius: 4, background: "linear-gradient(to right, #0a1525, #0a4a3a, #00c896)" }} />
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>40+</span>
+          </div>
         </div>
       </div>
       {tooltip && (
-        <div style={{ position: "fixed", left: tooltip.x + 14, top: tooltip.y - 12, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", fontSize: 13, pointerEvents: "none", zIndex: 9999, boxShadow: "0 10px 30px rgba(0,0,0,0.6)", minWidth: 170 }}>
-          <div style={{ fontWeight: 700, color: C.text, marginBottom: 6, fontSize: 14 }}>{tooltip.country}</div>
-          {tooltip.data ? (
-            <>
-              <div style={{ color: C.muted }}>Regulations: <span style={{ color: C.text, fontWeight: 600 }}>{tooltip.data.total}</span></div>
-              <div style={{ color: C.muted }}>In Scope: <span style={{ color: "#10b981", fontWeight: 600 }}>{tooltip.data.inScope}</span></div>
-              <div style={{ color: C.muted }}>Coverage: <span style={{ color: C.text, fontWeight: 600 }}>{Math.round(tooltip.data.inScope / tooltip.data.total * 100)}%</span></div>
-            </>
-          ) : <div style={{ color: C.muted, fontStyle: "italic" }}>No regulations mapped</div>}
+        <div style={{ position: "fixed", left: tooltip.x + 14, top: tooltip.y - 12, background: "#0f1a2e", border: `1px solid rgba(0,200,150,0.2)`, borderRadius: 10, padding: "10px 16px", fontSize: 13, pointerEvents: "none", zIndex: 9999, boxShadow: "0 10px 30px rgba(0,0,0,0.7)", minWidth: 170 }}>
+          <div style={{ fontWeight: 700, color: "#fff", marginBottom: 6, fontSize: 14 }}>{tooltip.name}</div>
+          <div style={{ color: "rgba(255,255,255,0.5)" }}>Regulations: <span style={{ color: "#00c896", fontWeight: 600 }}>{tooltip.data.total}</span></div>
+          <div style={{ color: "rgba(255,255,255,0.5)" }}>In Scope: <span style={{ color: "#10b981", fontWeight: 600 }}>{tooltip.data.inScope}</span></div>
+          <div style={{ color: "rgba(255,255,255,0.5)" }}>Coverage: <span style={{ color: "#fff", fontWeight: 600 }}>{Math.round(tooltip.data.inScope / tooltip.data.total * 100)}%</span></div>
         </div>
       )}
     </div>
@@ -414,18 +320,18 @@ function Dashboard({ allRegs, scopeMap, analysisMap }) {
   const upcoming = useMemo(() => allRegs.filter(r => { if (!r.deadline) return false; const d = daysUntil(r.deadline); return d !== null && d >= 0 && d <= 180; }).sort((a, b) => new Date(a.deadline) - new Date(b.deadline)).slice(0, 8), [allRegs]);
   const byDomain = useMemo(() => { const m = {}; allRegs.forEach(r => { if (!m[r.domain]) m[r.domain] = { total: 0, inScope: 0 }; m[r.domain].total++; if ((scopeMap[r.id] || "Pending") === "In Scope") m[r.domain].inScope++; }); return Object.entries(m).sort((a, b) => b[1].total - a[1].total); }, [allRegs, scopeMap]);
   const byRegion = useMemo(() => { const m = {}; allRegs.forEach(r => { m[r.region] = (m[r.region] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]); }, [allRegs]);
+  const jurisdictionCount = useMemo(() => new Set(allRegs.map(r => r.region)).size, [allRegs]);
+  const countryCount = useMemo(() => new Set(allRegs.flatMap(r => REGION_COUNTRIES[r.region] || [r.region])).size, [allRegs]);
   return (
     <div className="fadeIn">
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 26, fontWeight: 800, color: C.text }}>Compliance Posture Dashboard</h1>
         <p style={{ fontSize: 15, color: C.muted, marginTop: 6 }}>Global regulatory inventory overview for Marsh entities</p>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 14, marginBottom: 24 }}>
-        <StatCard label="Total Regulations" value={allRegs.length} color="indigo" />
-        <StatCard label="In Scope" value={byScope["In Scope"]} sub="Applicable" color="emerald" />
-        <StatCard label="Out of Scope" value={byScope["Out of Scope"]} sub="Excluded" color="red" />
-        <StatCard label="Pending Review" value={byScope.Pending} sub="Awaiting" color="amber" />
-        <StatCard label="Analyzed" value={analyzed} sub="AI complete" color="blue" />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 24 }}>
+        <StatCard label="Total Regulations" value={allRegs.length} sub={`${analyzed} analyzed`} color="indigo" />
+        <StatCard label="Jurisdictions" value={jurisdictionCount} sub="Regulatory regions" color="blue" />
+        <StatCard label="Countries" value={countryCount} sub="Nations covered" color="emerald" />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
