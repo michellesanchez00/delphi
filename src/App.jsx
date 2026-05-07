@@ -23,14 +23,14 @@ async function jbSet(key, value) {
 }
 
 const C = {
-  bg: "#080a0f", panel: "#0f1117", panel2: "#161b26", border: "#1c2333",
-  text: "#e8edf5", muted: "#5a6880", accent: "#6366f1", accentHover: "#818cf8",
-  green: "#10b981", greenBg: "rgba(16,185,129,0.1)", greenBorder: "rgba(16,185,129,0.25)",
-  red: "#ef4444", redBg: "rgba(239,68,68,0.1)", redBorder: "rgba(239,68,68,0.25)",
-  amber: "#f59e0b", amberBg: "rgba(245,158,11,0.1)", amberBorder: "rgba(245,158,11,0.25)",
-  blue: "#3b82f6", blueBg: "rgba(59,130,246,0.1)", blueBorder: "rgba(59,130,246,0.25)",
-  indigo: "#6366f1", indigoBg: "rgba(99,102,241,0.1)", indigoBorder: "rgba(99,102,241,0.25)",
-  purple: "#a855f7", purpleBg: "rgba(168,85,247,0.1)", purpleBorder: "rgba(168,85,247,0.25)",
+  bg: "#070910", panel: "#0e1118", panel2: "#151a24", border: "#232d3f",
+  text: "#f0f4fc", muted: "#94a3b8", accent: "#818cf8", accentHover: "#a5b4fc",
+  green: "#34d399", greenBg: "rgba(52,211,153,0.1)", greenBorder: "rgba(52,211,153,0.3)",
+  red: "#f87171", redBg: "rgba(248,113,113,0.1)", redBorder: "rgba(248,113,113,0.3)",
+  amber: "#fbbf24", amberBg: "rgba(251,191,36,0.1)", amberBorder: "rgba(251,191,36,0.3)",
+  blue: "#60a5fa", blueBg: "rgba(96,165,250,0.1)", blueBorder: "rgba(96,165,250,0.3)",
+  indigo: "#818cf8", indigoBg: "rgba(129,140,248,0.1)", indigoBorder: "rgba(129,140,248,0.3)",
+  purple: "#c084fc", purpleBg: "rgba(192,132,252,0.1)", purpleBorder: "rgba(192,132,252,0.3)",
 };
 
 const formatDeadline = (iso) => { if (!iso) return null; return new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); };
@@ -56,7 +56,7 @@ const NAV = [
 const G = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:#080a0f;color:#e8edf5;font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
+body{background:#070910;color:#e8edf5;font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
 input,select,button,textarea{font-family:inherit;font-size:14px;}
 ::-webkit-scrollbar{width:6px;height:6px;}
 ::-webkit-scrollbar-thumb{background:#1c2333;border-radius:6px;}
