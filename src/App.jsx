@@ -160,13 +160,16 @@ const REGION_COUNTRIES = {
 };
 
 function WorldHeatmap({ allRegs, scopeMap }) {
-  const svgRef = useRef(null);
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [tooltip, setTooltip] = useState(null);
+  const [worldData, setWorldData] = useState(null);
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef(null);
+  const transformRef = useRef(transform);
+  transformRef.current = transform;
 
-  // Build country density map
   const countryData = useMemo(() => {
     const map = {};
     allRegs.forEach(r => {
@@ -182,103 +185,223 @@ function WorldHeatmap({ allRegs, scopeMap }) {
 
   const maxCount = useMemo(() => Math.max(1, ...Object.values(countryData).map(d => d.total)), [countryData]);
 
-  // Mercator projection
-  const W = 900, H = 440;
+  // Load world topojson
+  useEffect(() => {
+    fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
+      .then(r => r.json()).then(setWorldData).catch(() => setWorldData(null));
+  }, []);
+
+  const W = 960, H = 500;
   const project = ([lat, lng]) => {
     const x = (lng + 180) * (W / 360);
     const latRad = (lat * Math.PI) / 180;
     const mercN = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
     const y = H / 2 - (W * mercN) / (2 * Math.PI);
-    return [x, y];
+    return [x, Math.max(0, Math.min(H, y))];
   };
 
-  const handleWheel = (e) => {
+  // Draw on canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+
+    // Ocean background
+    ctx.fillStyle = "#0c111e";
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid lines
+    ctx.strokeStyle = "#1c2333";
+    ctx.lineWidth = 0.5;
+    [-60, -30, 0, 30, 60].forEach(lat => {
+      const [, y] = project([lat, 0]);
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    });
+    [-150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150].forEach(lng => {
+      const [x] = project([0, lng]);
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    });
+
+    // Draw land from topojson if loaded
+    if (worldData) {
+      try {
+        // Simple topojson path drawing using arc decoder
+        const topoFeatures = worldData.objects?.countries;
+        if (topoFeatures && worldData.arcs) {
+          const drawArc = (arcIdx) => {
+            const arc = arcIdx < 0 ? [...worldData.arcs[~arcIdx]].reverse() : worldData.arcs[arcIdx];
+            if (!arc || arc.length === 0) return;
+            let x = 0, y = 0;
+            arc.forEach(([dx, dy], i) => {
+              x += dx; y += dy;
+              const scale = worldData.transform?.scale || [1, 1];
+              const translate = worldData.transform?.translate || [0, 0];
+              const lon = x * scale[0] + translate[0];
+              const lat = y * scale[1] + translate[1];
+              const [px, py] = project([lat, lon]);
+              if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            });
+          };
+          ctx.fillStyle = "#1a2235";
+          ctx.strokeStyle = "#2a3550";
+          ctx.lineWidth = 0.4;
+          const geoms = topoFeatures.geometries || [];
+          geoms.forEach(geom => {
+            ctx.beginPath();
+            const arcsGroups = geom.type === "Polygon" ? geom.arcs : geom.type === "MultiPolygon" ? geom.arcs.flat() : [];
+            arcsGroups.forEach(ring => ring.forEach(arcIdx => drawArc(arcIdx)));
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          });
+        }
+      } catch (e) { /* silent fallback */ }
+    } else {
+      // Fallback: simple rectangle regions to show something
+      ctx.fillStyle = "#1a2235";
+      ctx.strokeStyle = "#2a3550";
+      ctx.lineWidth = 0.5;
+      const regions = [
+        [-170,-60,60,80], // Americas rough
+        [-15,-35,55,72],  // Europe/Africa rough
+        [25,-10,145,55],  // Asia rough
+        [113,-43,154,-10],// Australia rough
+      ];
+      regions.forEach(([x1,y1,x2,y2]) => {
+        const [px1, py1] = project([y2, x1]);
+        const [px2, py2] = project([y1, x2]);
+        ctx.beginPath();
+        ctx.rect(px1, py1, px2-px1, py2-py1);
+        ctx.fill(); ctx.stroke();
+      });
+    }
+
+    // Draw country bubbles
+    Object.entries(COUNTRY_COORDS).forEach(([country, coords]) => {
+      if (country === "Global") return;
+      const [x, y] = project(coords);
+      const data = countryData[country];
+      if (!data) {
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(99,102,241,0.2)";
+        ctx.fill();
+        return;
+      }
+      const pct = data.total / maxCount;
+      const r = 7 + pct * 26;
+      const inScopePct = data.total > 0 ? data.inScope / data.total : 0;
+      const col = inScopePct > 0.6 ? "#10b981" : inScopePct > 0.2 ? "#f59e0b" : "#6366f1";
+      const colRgb = inScopePct > 0.6 ? "16,185,129" : inScopePct > 0.2 ? "245,158,11" : "99,102,241";
+      // Outer glow ring
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${colRgb},0.12)`; ctx.fill();
+      ctx.strokeStyle = `rgba(${colRgb},0.5)`; ctx.lineWidth = 1.5; ctx.stroke();
+      // Inner filled portion (in-scope fraction)
+      const innerR = Math.max(4, r * 0.65);
+      ctx.beginPath(); ctx.arc(x, y, innerR, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${colRgb},0.7)`; ctx.fill();
+      // Count label
+      ctx.fillStyle = "#fff";
+      ctx.font = `bold ${Math.max(8, Math.min(11, r * 0.7))}px Inter, sans-serif`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(data.total, x, y);
+    });
+  }, [worldData, countryData, maxCount]);
+
+  const getHoveredCountry = useCallback((clientX, clientY) => {
+    const container = containerRef.current;
+    if (!container) return null;
+    const rect = container.getBoundingClientRect();
+    const t = transformRef.current;
+    const canvasX = (clientX - rect.left - t.x) / t.scale;
+    const canvasY = (clientY - rect.top - t.y) / t.scale;
+    let closest = null; let minDist = 30;
+    Object.entries(COUNTRY_COORDS).forEach(([country, coords]) => {
+      const [x, y] = project(coords);
+      const dist = Math.sqrt((canvasX - x) ** 2 + (canvasY - y) ** 2);
+      if (dist < minDist) { minDist = dist; closest = country; }
+    });
+    return closest;
+  }, []);
+
+  const handleWheel = useCallback((e) => {
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.2 : 0.85;
-    setTransform(t => ({ ...t, scale: Math.max(0.5, Math.min(6, t.scale * factor)) }));
-  };
+    setTransform(t => ({ ...t, scale: Math.max(0.6, Math.min(8, t.scale * factor)) }));
+  }, []);
 
-  const handleMouseDown = (e) => { setDragging(true); dragStart.current = { x: e.clientX - transform.x, y: e.clientY - transform.y }; };
-  const handleMouseMove = (e) => { if (!dragging || !dragStart.current) return; setTransform(t => ({ ...t, x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y })); };
-  const handleMouseUp = () => setDragging(false);
-  const handleKey = (e) => { if (e.key === "Escape") setTransform({ x: 0, y: 0, scale: 1 }); if (e.key === "+") setTransform(t => ({ ...t, scale: Math.min(6, t.scale * 1.3) })); if (e.key === "-") setTransform(t => ({ ...t, scale: Math.max(0.5, t.scale * 0.8) })); };
+  const handleMouseDown = useCallback((e) => {
+    setDragging(true);
+    dragStart.current = { x: e.clientX - transformRef.current.x, y: e.clientY - transformRef.current.y };
+  }, []);
+
+  const handleMouseMove = useCallback((e) => {
+    if (dragging && dragStart.current) {
+      setTransform(t => ({ ...t, x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y }));
+    }
+    const country = getHoveredCountry(e.clientX, e.clientY);
+    if (country) setTooltip({ country, x: e.clientX, y: e.clientY, data: countryData[country] || null });
+    else setTooltip(null);
+  }, [dragging, getHoveredCountry, countryData]);
+
+  const handleMouseUp = useCallback(() => setDragging(false), []);
+  const handleKey = useCallback((e) => {
+    if (e.key === "Escape") setTransform({ x: 0, y: 0, scale: 1 });
+    if (e.key === "+" || e.key === "=") setTransform(t => ({ ...t, scale: Math.min(8, t.scale * 1.3) }));
+    if (e.key === "-") setTransform(t => ({ ...t, scale: Math.max(0.6, t.scale * 0.8) }));
+  }, []);
 
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginTop: 20 }}>
-      <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ padding: "16px 22px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Global Regulation Density</div>
-          <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Bubble size = regulation count · +/− to zoom · drag to pan · Esc to reset</div>
+          <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Bubble size = regulation count · scroll or +/− to zoom · drag to pan · Esc to reset</div>
         </div>
-        <button onClick={() => setTransform({ x: 0, y: 0, scale: 1 })} style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer" }}>Reset</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {!worldData && <span style={{ fontSize: 12, color: C.muted }}>Loading map...</span>}
+          <button onClick={() => setTransform({ x: 0, y: 0, scale: 1 })} style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer" }}>Reset</button>
+        </div>
       </div>
       <div
-        style={{ position: "relative", height: 440, overflow: "hidden", cursor: dragging ? "grabbing" : "grab", touchAction: "pan-y", background: "#0c111e" }}
-        onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp} onKeyDown={handleKey} tabIndex={0}
-        ref={svgRef}
+        ref={containerRef}
+        style={{ position: "relative", height: 480, overflow: "hidden", cursor: dragging ? "grabbing" : "grab", touchAction: "pan-y", background: "#0c111e" }}
+        onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp} onMouseLeave={() => { handleMouseUp(); setTooltip(null); }}
+        onKeyDown={handleKey} tabIndex={0}
       >
-        <svg width={W} height={H} style={{ position: "absolute", transform: `translate(${transform.x}px,${transform.y}px) scale(${transform.scale})`, transformOrigin: "center", transition: dragging ? "none" : "transform 0.1s", userSelect: "none" }}>
-          {/* Grid lines */}
-          {[-60,-30,0,30,60].map(lat => {
-            const [,y] = project([lat, 0]);
-            return <line key={lat} x1={0} y1={y} x2={W} y2={y} stroke={C.border} strokeWidth={0.5} opacity={0.5}/>;
-          })}
-          {[-150,-120,-90,-60,-30,0,30,60,90,120,150].map(lng => {
-            const [x] = project([0, lng]);
-            return <line key={lng} x1={x} y1={0} x2={x} y2={H} stroke={C.border} strokeWidth={0.5} opacity={0.5}/>;
-          })}
-          {/* Country bubbles */}
-          {Object.entries(COUNTRY_COORDS).map(([country, coords]) => {
-            const [x, y] = project(coords);
-            const data = countryData[country];
-            if (!data) return (
-              <circle key={country} cx={x} cy={y} r={3} fill={C.border} opacity={0.4}
-                onMouseEnter={(e) => setTooltip({ country, x: e.clientX, y: e.clientY, data: null })}
-                onMouseLeave={() => setTooltip(null)} style={{ cursor: "default" }} />
-            );
-            const pct = data.total / maxCount;
-            const r = 6 + pct * 28;
-            const inScopePct = data.total > 0 ? data.inScope / data.total : 0;
-            const col = inScopePct > 0.6 ? C.green : inScopePct > 0.2 ? C.amber : C.indigo;
-            return (
-              <g key={country}>
-                <circle cx={x} cy={y} r={r} fill={col} opacity={0.15} />
-                <circle cx={x} cy={y} r={r} fill="none" stroke={col} strokeWidth={1.5} opacity={0.6} />
-                <circle cx={x} cy={y} r={Math.max(3, r * inScopePct)} fill={col} opacity={0.7} />
-                <text x={x} y={y + r + 10} textAnchor="middle" fill={C.muted} fontSize={8} opacity={0.8}>{country === "Global" ? "" : data.total}</text>
-                <circle cx={x} cy={y} r={r + 4} fill="transparent" style={{ cursor: "pointer" }}
-                  onMouseEnter={(e) => setTooltip({ country, x: e.clientX, y: e.clientY, data })}
-                  onMouseLeave={() => setTooltip(null)} />
-              </g>
-            );
-          })}
-        </svg>
+        <canvas
+          ref={canvasRef} width={W} height={H}
+          style={{ position: "absolute", transform: `translate(${transform.x}px,${transform.y}px) scale(${transform.scale})`, transformOrigin: "0 0", transition: dragging ? "none" : "transform 0.08s", imageRendering: "crisp-edges" }}
+        />
         {/* Legend */}
-        <div style={{ position: "absolute", bottom: 12, left: 16, display: "flex", gap: 16, fontSize: 11, color: C.muted }}>
-          {[{ col: C.green, label: ">60% in scope" }, { col: C.amber, label: "20–60% in scope" }, { col: C.indigo, label: "<20% in scope" }].map(({ col, label }) => (
-            <div key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <div style={{ width: 10, height: 10, borderRadius: "50%", background: col, opacity: 0.8 }} />
-              {label}
+        <div style={{ position: "absolute", bottom: 14, left: 16, display: "flex", gap: 14, fontSize: 12, color: C.muted, background: "rgba(8,10,15,0.8)", padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}` }}>
+          {[{ col: "#10b981", label: ">60% in scope" }, { col: "#f59e0b", label: "20–60% in scope" }, { col: "#6366f1", label: "<20% in scope" }].map(({ col, label }) => (
+            <div key={label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{ width: 11, height: 11, borderRadius: "50%", background: col }} />{label}
             </div>
           ))}
         </div>
         {/* Zoom controls */}
-        <div style={{ position: "absolute", top: 12, right: 12, display: "flex", flexDirection: "column", gap: 4 }}>
-          {["+", "−"].map(z => (
-            <button key={z} onClick={() => setTransform(t => ({ ...t, scale: z === "+" ? Math.min(6, t.scale * 1.3) : Math.max(0.5, t.scale * 0.8) }))}
-              style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>{z}</button>
+        <div style={{ position: "absolute", top: 14, right: 14, display: "flex", flexDirection: "column", gap: 4 }}>
+          {[{ z: "+", label: "+" }, { z: "-", label: "−" }].map(({ z, label }) => (
+            <button key={z} onClick={() => setTransform(t => ({ ...t, scale: z === "+" ? Math.min(8, t.scale * 1.3) : Math.max(0.6, t.scale * 0.8) }))}
+              style={{ width: 30, height: 30, borderRadius: 7, border: `1px solid ${C.border}`, background: "rgba(15,17,23,0.9)", color: C.text, fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>{label}</button>
           ))}
         </div>
       </div>
-      {/* Tooltip */}
       {tooltip && (
-        <div style={{ position: "fixed", left: tooltip.x + 12, top: tooltip.y - 10, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 14px", fontSize: 13, pointerEvents: "none", zIndex: 999, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", minWidth: 160 }}>
-          <div style={{ fontWeight: 700, color: C.text, marginBottom: 4 }}>{tooltip.country}</div>
-          {tooltip.data ? <>
-            <div style={{ color: C.muted }}>Regulations: <span style={{ color: C.text, fontWeight: 600 }}>{tooltip.data.total}</span></div>
-            <div style={{ color: C.muted }}>In Scope: <span style={{ color: C.green, fontWeight: 600 }}>{tooltip.data.inScope}</span></div>
-          </> : <div style={{ color: C.muted, fontStyle: "italic" }}>No regulations</div>}
+        <div style={{ position: "fixed", left: tooltip.x + 14, top: tooltip.y - 12, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", fontSize: 13, pointerEvents: "none", zIndex: 9999, boxShadow: "0 10px 30px rgba(0,0,0,0.6)", minWidth: 170 }}>
+          <div style={{ fontWeight: 700, color: C.text, marginBottom: 6, fontSize: 14 }}>{tooltip.country}</div>
+          {tooltip.data ? (
+            <>
+              <div style={{ color: C.muted }}>Regulations: <span style={{ color: C.text, fontWeight: 600 }}>{tooltip.data.total}</span></div>
+              <div style={{ color: C.muted }}>In Scope: <span style={{ color: "#10b981", fontWeight: 600 }}>{tooltip.data.inScope}</span></div>
+              <div style={{ color: C.muted }}>Coverage: <span style={{ color: C.text, fontWeight: 600 }}>{Math.round(tooltip.data.inScope / tooltip.data.total * 100)}%</span></div>
+            </>
+          ) : <div style={{ color: C.muted, fontStyle: "italic" }}>No regulations mapped</div>}
         </div>
       )}
     </div>
