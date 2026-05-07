@@ -1,1895 +1,1150 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { REGULATIONS, CONTROLS_LIBRARY, DOMAINS, REGIONS, MARSH_ENTITIES } from "./regulatoryData";
+import { useState } from "react";
 
-const PROXY_URL = "https://delphi-proxy.vercel.app/api/claude";
-const SESSION_KEY = "delphi_auth";
-const SCOPE_KEY = "delphi_scope";
-const ANALYSIS_KEY = "delphi_analyses";
-const URLS_KEY = "delphi_urls";
-const INGESTED_KEY = "delphi_ingested"; // regulations ingested from URL scans
-const JSONBIN_KEY = "$2a$10$nY52ddUvcB.nOkkqL2Rz5.FLU7LeIE4hyH7O1tOJ7SoHvU7di65Xi";
-const JSONBIN_BIN = "69f39261856a6821898fd552";
-const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN}`;
-const JH = { "Content-Type": "application/json", "X-Master-Key": JSONBIN_KEY };
-
-const storage = {
-  get: (k, d = null) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
-  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
-};
-
-async function jbGet() {
-  try { const r = await fetch(JSONBIN_URL + "/latest", { headers: JH, cache: "no-store" }); const d = await r.json(); return d.record || {}; } catch { return {}; }
-}
-async function jbSet(key, value) {
-  try { const rec = await jbGet(); const up = { ...rec, [key]: value }; await fetch(JSONBIN_URL, { method: "PUT", headers: JH, body: JSON.stringify(up) }); } catch {}
+// ── Device Detection ──────────────────────────────────────────────────────────
+function detectMobile() {
+  // Check actual device user agent — not screen width
+  // This works correctly even inside narrow iframes like Claude artifacts
+  var ua = navigator.userAgent || navigator.vendor || window.opera || "";
+  var isMobileUA = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i.test(ua);
+  var isTouchOnly = (navigator.maxTouchPoints > 1) && !window.matchMedia("(pointer: fine)").matches;
+  return isMobileUA || isTouchOnly;
 }
 
-const DARK_THEME = {
-  bg: "#070910", panel: "#0e1118", panel2: "#151a24", border: "#232d3f",
-  text: "#ffffff", muted: "#b8c5d6", accent: "#818cf8", accentHover: "#a5b4fc",
-  green: "#34d399", greenBg: "rgba(52,211,153,0.1)", greenBorder: "rgba(52,211,153,0.3)",
-  red: "#f87171", redBg: "rgba(248,113,113,0.1)", redBorder: "rgba(248,113,113,0.3)",
-  amber: "#fbbf24", amberBg: "rgba(251,191,36,0.1)", amberBorder: "rgba(251,191,36,0.3)",
-  blue: "#60a5fa", blueBg: "rgba(96,165,250,0.1)", blueBorder: "rgba(96,165,250,0.3)",
-  indigo: "#818cf8", indigoBg: "rgba(129,140,248,0.1)", indigoBorder: "rgba(129,140,248,0.3)",
-  purple: "#c084fc", purpleBg: "rgba(192,132,252,0.1)", purpleBorder: "rgba(192,132,252,0.3)",
-};
+var IS_MOBILE = detectMobile();
 
-const LIGHT_THEME = {
-  bg: "#f0f4f8", panel: "#ffffff", panel2: "#f5f7fa", border: "#dde3ed",
-  text: "#0f172a", muted: "#475569", accent: "#4f46e5", accentHover: "#6366f1",
-  green: "#059669", greenBg: "rgba(5,150,105,0.08)", greenBorder: "rgba(5,150,105,0.25)",
-  red: "#dc2626", redBg: "rgba(220,38,38,0.08)", redBorder: "rgba(220,38,38,0.25)",
-  amber: "#d97706", amberBg: "rgba(217,119,6,0.08)", amberBorder: "rgba(217,119,6,0.25)",
-  blue: "#2563eb", blueBg: "rgba(37,99,235,0.08)", blueBorder: "rgba(37,99,235,0.25)",
-  indigo: "#4f46e5", indigoBg: "rgba(79,70,229,0.08)", indigoBorder: "rgba(79,70,229,0.25)",
-  purple: "#7c3aed", purpleBg: "rgba(124,58,237,0.08)", purpleBorder: "rgba(124,58,237,0.25)",
-};
-
-// C is set dynamically - initialized to dark, updated when theme changes
-let C = { ...DARK_THEME };
-
-const formatDeadline = (iso) => { if (!iso) return null; return new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); };
-const daysUntil = (iso) => { if (!iso) return null; const n = new Date(); n.setHours(0, 0, 0, 0); return Math.round((new Date(iso + "T00:00:00") - n) / 86400000); };
-const urgencyColor = (d) => { if (d === null) return C.muted; if (d < 0) return C.red; if (d <= 90) return C.amber; if (d <= 180) return C.blue; return C.green; };
-const scopeStyle = (s) => ({ "In Scope": { bg: C.greenBg, border: C.greenBorder, color: C.green }, "Out of Scope": { bg: C.redBg, border: C.redBorder, color: C.red }, Pending: { bg: C.amberBg, border: C.amberBorder, color: C.amber } }[s] || { bg: "rgba(90,104,128,0.1)", border: "rgba(90,104,128,0.3)", color: C.muted });
-const statusStyle = (s) => ({ "In Force": { bg: C.greenBg, border: C.greenBorder, color: C.green }, Proposed: { bg: C.amberBg, border: C.amberBorder, color: C.amber }, Analyzed: { bg: C.indigoBg, border: C.indigoBorder, color: C.indigo }, Repealed: { bg: C.redBg, border: C.redBorder, color: C.red } }[s] || { bg: "rgba(90,104,128,0.1)", border: "rgba(90,104,128,0.3)", color: C.muted });
-const riskColor = r => ({ High: C.red, Medium: C.amber, Low: C.green }[r] || C.muted);
-
-function Badge({ text, style: s = {} }) {
-  return (<span style={{ display: "inline-flex", alignItems: "center", fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 20, border: "1px solid", backgroundColor: s.bg || "rgba(90,104,128,0.1)", borderColor: s.border || "rgba(90,104,128,0.3)", color: s.color || C.muted, whiteSpace: "nowrap" }}>{text}</span>);
+// Apply body class once so CSS can target it
+if (IS_MOBILE) {
+  document.body.classList.add("is-mobile");
+} else {
+  document.body.classList.remove("is-mobile");
 }
 
-const NAV = [
-  { id: "dashboard", label: "Dashboard", icon: "⊞" },
-  { id: "inventory", label: "Regulation Inventory", icon: "≡" },
-  { id: "analyze", label: "Analyze", icon: "⚡" },
-  { id: "controls", label: "Controls Library", icon: "✓" },
-  { id: "timeline", label: "Timeline", icon: "→" },
-  { id: "calendar", label: "Calendar", icon: "▦" },
+// ── Storage & TTL ─────────────────────────────────────────────────────────────
+const TTL_DEFAULT = 10 * 24 * 60 * 60 * 1000;  // 10 days
+const TTL_INSCOPE = 20 * 24 * 60 * 60 * 1000;  // 20 days
+
+function saveRegs(regs) {
+  try { localStorage.setItem("delphi_regs", JSON.stringify(regs)); } catch(e) {}
+}
+
+function loadRegs() {
+  try {
+    var stored = localStorage.getItem("delphi_regs");
+    if (!stored) return [];
+    var regs = JSON.parse(stored);
+    var now = Date.now();
+    // Purge expired regulations
+    return regs.filter(function(r) {
+      var ttl = r.inScope ? TTL_INSCOPE : TTL_DEFAULT;
+      return (now - r.savedAt) < ttl;
+    });
+  } catch(e) { return []; }
+}
+
+function getExpiryLabel(reg) {
+  var ttl = reg.inScope ? TTL_INSCOPE : TTL_DEFAULT;
+  var ms = ttl - (Date.now() - reg.savedAt);
+  if (ms <= 0) return "Expired";
+  var hours = Math.floor(ms / 3600000);
+  if (hours < 24) return "Expires in " + hours + "h";
+  return "Expires in " + Math.floor(hours / 24) + "d";
+}
+
+// Collect all controls from all saved regs (excluding current)
+function getAllControls(regs, excludeId) {
+  var controls = [];
+  regs.forEach(function(r) {
+    if (r.id === excludeId || !r.analysis) return;
+    (r.analysis.controls || []).forEach(function(c) {
+      controls.push({ regId: r.id, regTitle: r.title, controlId: c.controlId, title: c.title });
+    });
+  });
+  return controls;
+}
+
+function isDuplicate(controlTitle, allControls) {
+  var t = controlTitle.toLowerCase().trim();
+  return allControls.find(function(c) {
+    var sim = c.title.toLowerCase().trim();
+    // Simple similarity: check if 60%+ of words match
+    var words = t.split(/\s+/);
+    var matches = words.filter(function(w) { return w.length > 3 && sim.includes(w); });
+    return matches.length >= Math.ceil(words.length * 0.6);
+  });
+}
+
+const C = {
+  bg: "#0a0f1a", panel: "#0f1628", border: "#1e2d4a",
+  accent: "#00d4ff", accent3: "#7c3aed", text: "#e2e8f0",
+  muted: "#64748b", success: "#10b981", warning: "#f59e0b", critical: "#ef4444",
+};
+
+const DEFAULT_SOURCES = [
+  { id: 1, icon: "🇪🇺", label: "EC Financial Services", url: "https://finance.ec.europa.eu/regulation-and-supervision/financial-services-legislation_en", description: "EU financial services legislation" },
+  { id: 2, icon: "🏛", label: "EP Legislative Observatory", url: "https://oeil.secure.europarl.europa.eu/oeil/home/home.do", description: "European Parliament legislative tracking" },
+  { id: 3, icon: "⚖", label: "EU Law Tracker", url: "https://law-tracker.europa.eu/homepage", description: "Track EU law through the legislative process" },
 ];
 
-const getGlobalStyles = (theme) => `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
-*{box-sizing:border-box;margin:0;padding:0;}
-body{background:${theme === "light" ? "#f0f4f8" : "#070910"};color:${theme === "light" ? "#0f172a" : "#ffffff"};font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
-input,select,button,textarea{font-family:inherit;font-size:14px;}
-::-webkit-scrollbar{width:6px;height:6px;}
-::-webkit-scrollbar-thumb{background:${theme === "light" ? "#cbd5e1" : "#1c2333"};border-radius:6px;}
-::-webkit-scrollbar-track{background:transparent;}
-@keyframes spin{to{transform:rotate(360deg)}}.spin{animation:spin 0.8s linear infinite;}
-@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}.fadeIn{animation:fadeIn 0.25s ease}
-table{border-collapse:collapse;width:100%;}
-tr:hover td{background:${theme === "light" ? "rgba(0,0,0,0.02)" : "rgba(255,255,255,0.015)"};}
-`;
-const G = getGlobalStyles("dark"); // default, will be overridden by App
+const SAMPLE_REGS = [
+  { title: "EU AI Act — Article 9 Risk Management", text: "Article 9 of the EU AI Act mandates that providers of high-risk AI systems must establish, implement, document and maintain a risk management system. This system shall consist of a continuous iterative process run throughout the entire lifecycle of a high-risk AI system. It shall ensure that risks associated with AI systems are identified, estimated, and evaluated. Where reasonably foreseeable misuse of the AI system could lead to risks, these shall also be evaluated. Providers must test their AI systems prior to placing them on the market or putting them into service. Compliance deadline: August 2026." },
+  { title: "SEC Cybersecurity Disclosure Rule", text: "The Securities and Exchange Commission adopted new rules requiring registrants to disclose material cybersecurity incidents they experience and to disclose on an annual basis material information regarding their cybersecurity risk management, strategy, and governance. Registrants must disclose any cybersecurity incident determined to be material on Form 8-K within four business days of determination. The rule also requires annual disclosures on Form 10-K. Effective date: December 2023 for large accelerated filers, June 2024 for smaller reporting companies." },
+];
 
-function Login({ onLogin, theme, toggleTheme }) {
-  C = theme === "light" ? { ...LIGHT_THEME } : { ...DARK_THEME };
-  const [pw, setPw] = useState(""); const [err, setErr] = useState("");
-  const go = () => pw === "Regscan" ? onLogin() : setErr("Incorrect password.");
-  return (
-    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, position: "relative" }}>
-      {toggleTheme && <button onClick={toggleTheme} style={{ position: "absolute", top: 20, right: 20, fontSize: 20, padding: "6px 10px", borderRadius: 9, cursor: "pointer", border: `1px solid ${C.border}`, background: C.panel, color: C.text }} title="Toggle theme">{theme === "dark" ? "☀️" : "🌙"}</button>}
-      <style>{getGlobalStyles(theme || "dark")}</style>
-      <div style={{ width: "100%", maxWidth: 520 }}>
-        <div style={{ textAlign: "center", marginBottom: 44 }}>
-          <div style={{ fontSize: 48, fontWeight: 900, color: C.text, letterSpacing: -2, marginBottom: 12, lineHeight: 1 }}>
-            <span style={{ color: C.accent }}>D</span>ELPHI
-          </div>
-          <div style={{ fontSize: 24, color: C.muted, fontWeight: 500, lineHeight: 1.35 }}>Document Extraction for Legal/Policy<br/>Harmonization &amp; Implementation</div>
-        </div>
-        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 20, padding: 36 }}>
-          <div style={{ marginBottom: 20 }}>
-            <label style={{ display: "block", fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>Access Code</label>
-            <input type="password" value={pw} onChange={e => { setPw(e.target.value); setErr(""); }} onKeyDown={e => e.key === "Enter" && go()} style={{ width: "100%", background: C.panel2, border: `1px solid ${err ? C.red : C.border}`, color: C.text, borderRadius: 10, padding: "12px 16px", fontSize: 15, outline: "none", transition: "border-color 0.2s" }} placeholder="Enter access code" autoFocus />
-            {err && <div style={{ color: C.red, fontSize: 13, marginTop: 8 }}>{err}</div>}
-          </div>
-          <button onClick={go} style={{ width: "100%", background: C.accent, border: "none", color: "#fff", fontWeight: 700, padding: "13px", borderRadius: 10, fontSize: 15, cursor: "pointer", letterSpacing: 0.3 }}>Access DELPHI</button>
-        </div>
-      </div>
-    </div>
-  );
+const MMC_ENTITIES = "Marsh McLennan (MMC parent), Marsh Risk (insurance broking), Guy Carpenter/Marsh Re (reinsurance), Mercer (HR/retirement/investment consulting), Oliver Wyman (management consulting, includes Lippincott and NERA), MMC Securities LLC (SEC broker-dealer), MMC Securities Limited (FCA-regulated UK), MMC Securities Ireland Limited (Central Bank of Ireland), MMA Securities LLC, MMA Asset Management LLC (SEC investment adviser), Victor Insurance, McGriff Insurance Services";
+
+function riskColor(level) {
+  return { Critical: C.critical, High: C.warning, Medium: C.accent, Low: C.success }[level] || C.muted;
 }
 
-function Sidebar({ active, onNav, onLogout, totalRegs, inScope }) {
-  return (
-    <div style={{ position: "fixed", inset: "0 auto 0 0", width: 248, background: C.panel, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column", zIndex: 40, overflowY: "auto" }}>
-      <div style={{ padding: "24px 20px 20px", borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
-        <div style={{ fontSize: 22, fontWeight: 900, color: C.text, letterSpacing: -0.5 }}>
-          <span style={{ color: C.accent }}>D</span>ELPHI
-        </div>
-        <div style={{ fontSize: 11, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>Document Extraction for Legal/<br/>Policy Harmonization &amp; Implementation</div>
-      </div>
-      <nav style={{ flex: 1, padding: "14px 10px" }}>
-        {NAV.map(n => (
-          <button key={n.id} onClick={() => onNav(n.id)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 9, border: "none", cursor: "pointer", fontSize: 14, fontWeight: active === n.id ? 600 : 500, textAlign: "left", marginBottom: 3, background: active === n.id ? C.accent : "transparent", color: active === n.id ? "#fff" : C.muted, transition: "all 0.15s" }}>
-            <span style={{ fontSize: 15, width: 20, textAlign: "center", flexShrink: 0 }}>{n.icon}</span>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.label}</span>
-          </button>
-        ))}
-      </nav>
-      <div style={{ padding: "14px 18px", borderTop: `1px solid ${C.border}`, flexShrink: 0 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 13, color: C.muted }}>
-          <span>Regulations</span><span style={{ color: C.text, fontWeight: 600 }}>{totalRegs}</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14, fontSize: 13, color: C.muted }}>
-          <span>In Scope</span><span style={{ color: C.green, fontWeight: 600 }}>{inScope}</span>
-        </div>
-        <button onClick={onLogout} style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 13, cursor: "pointer" }}>Sign out</button>
-      </div>
-    </div>
-  );
+function priorityStyle(p) {
+  return {
+    Immediate: { background: "#ef444422", border: "1px solid #ef444444", color: C.critical },
+    "Short-term": { background: "#f59e0b22", border: "1px solid #f59e0b44", color: C.warning },
+    Ongoing: { background: "#10b98122", border: "1px solid #10b98144", color: C.success },
+  }[p] || { background: C.border, color: C.muted };
 }
 
-function StatCard({ label, value, sub, color }) {
-  const col = { indigo: C.indigo, emerald: C.green, amber: C.amber, red: C.red, blue: C.blue }[color] || C.indigo;
-  return (
-    <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderTop: `2px solid ${col}`, borderRadius: 14, padding: "18px 20px" }}>
-      <div style={{ fontSize: 30, fontWeight: 800, color: col, lineHeight: 1 }}>{value}</div>
-      <div style={{ fontSize: 14, color: C.text, fontWeight: 600, marginTop: 6 }}>{label}</div>
-      {sub && <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{sub}</div>}
-    </div>
-  );
-}
-
-// ── World Heatmap ──────────────────────────────────────────────────────────────
-const COUNTRY_COORDS = {
-  "United States": [37, -95], "Germany": [51, 10], "France": [46, 2], "United Kingdom": [54, -2],
-  "Japan": [36, 138], "China": [35, 105], "India": [20, 77], "Australia": [-25, 134],
-  "Canada": [56, -96], "Brazil": [-10, -55], "South Africa": [-29, 25], "Nigeria": [9, 8],
-  "Singapore": [1.3, 103.8], "Hong Kong": [22.3, 114.2], "UAE": [24, 54], "Saudi Arabia": [24, 45],
-  "Ireland": [53, -8], "Netherlands": [52, 5], "Switzerland": [47, 8], "Italy": [42, 12],
-  "Spain": [40, -4], "Sweden": [60, 15], "Norway": [60, 8], "Denmark": [56, 10],
-  "Belgium": [50, 4], "Austria": [47, 14], "Poland": [52, 20], "Czech Republic": [50, 15],
-  "Mexico": [23, -102], "Argentina": [-34, -64], "Chile": [-33, -71], "Colombia": [4, -72],
-  "South Korea": [37, 128], "Taiwan": [24, 121], "Indonesia": [-5, 120], "Malaysia": [3, 112],
-  "Thailand": [15, 101], "Philippines": [13, 122], "New Zealand": [-41, 174],
-  "Israel": [31, 35], "Turkey": [39, 35], "Egypt": [27, 30], "Kenya": [-1, 37],
-  "Ghana": [8, -2], "Morocco": [32, -5], "Global": [20, 0],
+const iStyle = {
+  width: "100%", background: "#0a0f1acc", border: "1px solid " + C.border,
+  borderRadius: 7, color: C.text, fontFamily: "inherit", fontSize: 12,
+  padding: "8px 10px", outline: "none", boxSizing: "border-box",
 };
 
-const REGION_COUNTRIES = {
-  EU: ["Germany", "France", "Ireland", "Netherlands", "Italy", "Spain", "Sweden", "Belgium", "Austria", "Poland"],
-  US: ["United States"], UK: ["United Kingdom"], Global: ["Global"],
-  APAC: ["Japan", "China", "Australia", "Singapore", "Hong Kong", "South Korea", "India", "Indonesia", "Malaysia"],
-  Canada: ["Canada"], LATAM: ["Brazil", "Mexico", "Argentina", "Colombia", "Chile"],
-  "Middle East": ["UAE", "Saudi Arabia", "Israel", "Turkey", "Egypt"],
-  Africa: ["South Africa", "Nigeria", "Kenya", "Ghana", "Morocco"],
-};
+// ── Proxy URL — replace with your Vercel deployment URL after deploying ──────
+const PROXY_URL = "https://delphi-proxy.vercel.app/api/claude";
+// ─────────────────────────────────────────────────────────────────────────────
 
-
-// Country ISO3 to name mapping for tooltip
-const ISO3_TO_NAME = {
-  "USA":"United States","DEU":"Germany","FRA":"France","GBR":"United Kingdom",
-  "JPN":"Japan","CHN":"China","IND":"India","AUS":"Australia","CAN":"Canada",
-  "BRA":"Brazil","ZAF":"South Africa","NGA":"Nigeria","SGP":"Singapore",
-  "HKG":"Hong Kong","ARE":"UAE","SAU":"Saudi Arabia","IRL":"Ireland",
-  "NLD":"Netherlands","CHE":"Switzerland","ITA":"Italy","ESP":"Spain",
-  "SWE":"Sweden","NOR":"Norway","DNK":"Denmark","BEL":"Belgium","AUT":"Austria",
-  "POL":"Poland","CZE":"Czech Republic","MEX":"Mexico","ARG":"Argentina",
-  "CHL":"Chile","COL":"Colombia","KOR":"South Korea","TWN":"Taiwan",
-  "IDN":"Indonesia","MYS":"Malaysia","THA":"Thailand","PHL":"Philippines",
-  "NZL":"New Zealand","ISR":"Israel","TUR":"Turkey","EGY":"Egypt",
-  "KEN":"Kenya","GHA":"Ghana","MAR":"Morocco",
-};
-
-function WorldHeatmap({ allRegs, scopeMap, theme }) {
-  const svgRef = useRef(null);
-  const [geoData, setGeoData] = useState(null);
-  const [tooltip, setTooltip] = useState(null);
-  const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 960, h: 500 });
-  const [dragging, setDragging] = useState(false);
-  const dragStart = useRef(null);
-
-  const isDark = theme !== "light";
-
-  const countryData = useMemo(() => {
-    const map = {};
-    allRegs.forEach(r => {
-      (REGION_COUNTRIES[r.region] || []).forEach(c => {
-        if (!map[c]) map[c] = { total: 0, inScope: 0 };
-        map[c].total++;
-        if ((scopeMap[r.id] || "Pending") === "In Scope") map[c].inScope++;
-      });
-    });
-    return map;
-  }, [allRegs, scopeMap]);
-
-  const maxCount = useMemo(() => Math.max(1, ...Object.values(countryData).map(d => d.total)), [countryData]);
-
-  const ISO3MAP = useMemo(() => ({
-    "840":"USA","276":"DEU","250":"FRA","826":"GBR","392":"JPN","156":"CHN",
-    "356":"IND","036":"AUS","124":"CAN","076":"BRA","710":"ZAF","566":"NGA",
-    "702":"SGP","344":"HKG","784":"ARE","682":"SAU","372":"IRL","528":"NLD",
-    "756":"CHE","380":"ITA","724":"ESP","752":"SWE","578":"NOR","208":"DNK",
-    "056":"BEL","040":"AUT","616":"POL","203":"CZE","484":"MEX","032":"ARG",
-    "152":"CHL","170":"COL","410":"KOR","158":"TWN","360":"IDN","458":"MYS",
-    "764":"THA","608":"PHL","554":"NZL","376":"ISR","792":"TUR","818":"EGY",
-    "404":"KEN","288":"GHA","504":"MAR",
-  }), []);
-
-  // Load topojson once
-  useEffect(() => {
-    fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
-      .then(r => r.json()).then(setGeoData).catch(() => {});
-  }, []);
-
-  // Convert topojson to SVG path strings
-  const svgPaths = useMemo(() => {
-    if (!geoData?.objects?.countries?.geometries || !geoData.arcs) return [];
-    const { scale: [kx, ky], translate: [tx, ty] } = geoData.transform;
-    const W = 960, H = 500;
-
-    // Decode all arcs to [x,y] mercator coords
-    const decodedArcs = geoData.arcs.map(arc => {
-      let ax = 0, ay = 0;
-      return arc.map(([dx, dy]) => {
-        ax += dx; ay += dy;
-        const lon = ax * kx + tx;
-        const lat = ay * ky + ty;
-        // Mercator projection
-        const x = (lon + 180) * (W / 360);
-        const latR = (lat * Math.PI) / 180;
-        const mercN = Math.log(Math.tan(Math.PI / 4 + latR / 2));
-        const y = Math.max(0, Math.min(H, H / 2 - (W * mercN) / (2 * Math.PI)));
-        return [x, y];
-      });
-    });
-
-    // Build path string from ring - M once at start, L everywhere else
-    const ringToPath = (ring) => {
-      const allPts = [];
-      ring.forEach(arcIdx => {
-        const pts = arcIdx < 0 ? [...decodedArcs[~arcIdx]].reverse() : decodedArcs[arcIdx];
-        // Skip first point of each arc after the first (it's the same as the last of the previous)
-        pts.forEach((pt, i) => {
-          if (allPts.length === 0 || i > 0) allPts.push(pt);
-        });
-      });
-      if (allPts.length === 0) return "";
-      return "M" + allPts.map(([x, y]) => x.toFixed(1) + "," + y.toFixed(1)).join("L") + "Z";
-    };
-
-    return geoData.objects.countries.geometries.map(geom => {
-      const numId = String(geom.id ?? "").padStart(3, "0");
-      const iso3 = ISO3MAP[numId] || "";
-      const data = countryData[Object.entries(ISO3_TO_NAME).find(([k]) => k === iso3)?.[1]] || null;
-      const intensity = data ? Math.min(1, data.total / maxCount) : 0;
-
-      let fill;
-      if (isDark) {
-        if (!data) fill = "#111c2e";
-        else {
-          // Teal gradient dark: deep navy → bright teal
-          const r = Math.round(8 + intensity * 4);
-          const g = Math.round(30 + intensity * 178);
-          const b = Math.round(50 + intensity * 138);
-          fill = `rgb(${r},${g},${b})`;
-        }
-      } else {
-        if (!data) fill = "#cdd9e8";
-        else {
-          // Teal gradient light: pale blue → vivid teal
-          const r = Math.round(180 - intensity * 140);
-          const g = Math.round(210 - intensity * 30);
-          const b = Math.round(220 - intensity * 60);
-          fill = `rgb(${r},${g},${b})`;
-        }
-      }
-
-      const stroke = isDark
-        ? (data ? "rgba(0,220,180,0.18)" : "rgba(255,255,255,0.04)")
-        : (data ? "rgba(0,120,100,0.2)" : "rgba(100,130,160,0.15)");
-
-      const rings = geom.type === "Polygon" ? geom.arcs
-        : geom.type === "MultiPolygon" ? geom.arcs.flat() : [];
-
-      const d = rings.map(ring => ringToPath(ring)).join(" ");
-      return { d, fill, stroke, iso3, name: ISO3_TO_NAME[iso3] || "", data };
-    });
-  }, [geoData, countryData, maxCount, isDark, ISO3MAP]);
-
-  // Zoom/pan handlers
-  const handleWheel = useCallback((e) => {
-    e.preventDefault();
-    const svg = svgRef.current;
-    if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) / rect.width * viewBox.w + viewBox.x;
-    const my = (e.clientY - rect.top) / rect.height * viewBox.h + viewBox.y;
-    const factor = e.deltaY < 0 ? 0.8 : 1.25;
-    setViewBox(v => {
-      const nw = Math.max(200, Math.min(960, v.w * factor));
-      const nh = Math.max(104, Math.min(500, v.h * factor));
-      return { x: mx - (mx - v.x) * (nw / v.w), y: my - (my - v.y) * (nh / v.h), w: nw, h: nh };
-    });
-  }, [viewBox]);
-
-  const handleMouseDown = useCallback((e) => {
-    setDragging(true);
-    dragStart.current = { x: e.clientX, y: e.clientY, vb: { ...viewBox } };
-  }, [viewBox]);
-
-  const handleMouseMove = useCallback((e) => {
-    if (dragging && dragStart.current) {
-      const svg = svgRef.current;
-      if (!svg) return;
-      const rect = svg.getBoundingClientRect();
-      const dx = (e.clientX - dragStart.current.x) / rect.width * dragStart.current.vb.w;
-      const dy = (e.clientY - dragStart.current.y) / rect.height * dragStart.current.vb.h;
-      setViewBox({ ...dragStart.current.vb, x: dragStart.current.vb.x - dx, y: dragStart.current.vb.y - dy });
+async function apiCall(messages, maxTokens, useSearch) {
+  const body = {
+    model: "claude-sonnet-4-20250514",
+    max_tokens: maxTokens || 4000,
+    messages: messages,
+  };
+  if (useSearch) {
+    body.tools = [{ type: "web_search_20250305", name: "web_search" }];
+  }
+  const res = await fetch(PROXY_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.error) {
+    const msg = data.error.message || JSON.stringify(data.error);
+    if (msg.includes("exceeded_limit") || JSON.stringify(data.error).includes("exceeded_limit")) {
+      throw new Error("LIMIT_EXCEEDED");
     }
-  }, [dragging]);
+    throw new Error(msg);
+  }
+  return (data.content || []).filter(function(b) { return b.type === "text"; }).map(function(b) { return b.text; }).join("");
+}
 
-  const handleMouseUp = useCallback(() => setDragging(false), []);
-  const handleKey = useCallback((e) => {
-    if (e.key === "Escape") setViewBox({ x: 0, y: 0, w: 960, h: 500 });
-    if (e.key === "+" || e.key === "=") setViewBox(v => ({ x: v.x + v.w*0.1, y: v.y + v.h*0.1, w: v.w*0.8, h: v.h*0.8 }));
-    if (e.key === "-") setViewBox(v => { const nw=Math.min(960,v.w*1.25); const nh=Math.min(500,v.h*1.25); return { x: v.x-(nw-v.w)/2, y: v.y-(nh-v.h)/2, w: nw, h: nh }; });
-  }, []);
+function limitMsg() {
+  return "Claude.ai usage limit reached. Please wait a few hours for it to reset, or paste regulation text manually. This limit will not apply once deployed with your own Anthropic API key.";
+}
 
-  const ocean = isDark ? "#0a0f1a" : "#d6e4f0";
-  const gridColor = isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.06)";
-  const vbStr = `${viewBox.x.toFixed(1)} ${viewBox.y.toFixed(1)} ${viewBox.w.toFixed(1)} ${viewBox.h.toFixed(1)}`;
+// ── ActionCard ────────────────────────────────────────────────────────────────
 
+function ActionCard(props) {
+  var action = props.action;
+  var index = props.index;
+  var open = props.open;
+  var onToggle = props.onToggle;
   return (
-    <div style={{ background: isDark ? "#0d1520" : "#e8f0f7", border: `2px solid ${C.border}`, borderRadius: 16, overflow: "hidden", marginTop: 20, boxShadow: isDark ? "0 4px 32px rgba(0,0,0,0.5)" : "0 4px 24px rgba(0,0,0,0.1)" }}>
-      <div style={{ padding: "14px 20px", borderBottom: `1px solid ${isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Global Regulatory Landscape</div>
-        <div style={{ display: "flex", gap: 4 }}>
-          {[
-            { label: "+", action: () => setViewBox(v => ({ x: v.x+v.w*0.1, y: v.y+v.h*0.1, w: v.w*0.8, h: v.h*0.8 })) },
-            { label: "−", action: () => setViewBox(v => { const nw=Math.min(960,v.w*1.25); const nh=Math.min(500,v.h*1.25); return { x: v.x-(nw-v.w)/2, y: v.y-(nh-v.h)/2, w: nw, h: nh }; }) },
-            { label: "⊡", action: () => setViewBox({ x: 0, y: 0, w: 960, h: 500 }) },
-          ].map(({ label, action }) => (
-            <button key={label} onClick={action} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)"}`, background: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)", color: C.text, fontSize: label === "⊡" ? 13 : 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>{label}</button>
-          ))}
+    <div style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 10, marginBottom: 10, overflow: "hidden" }}>
+      <div style={{ padding: "14px 18px", display: "flex", gap: 14, alignItems: "flex-start", cursor: "pointer" }} onClick={onToggle}>
+        <div style={{ background: C.accent + "22", border: "1px solid " + C.accent + "44", color: C.accent, width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: "bold", flexShrink: 0 }}>
+          {index + 1}
         </div>
-      </div>
-
-      <div style={{ position: "relative" }}
-        onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
-        <svg
-          ref={svgRef}
-          viewBox={vbStr}
-          width="100%" height={480}
-          style={{ display: "block", cursor: dragging ? "grabbing" : "grab", background: ocean, userSelect: "none" }}
-          onWheel={handleWheel} onMouseDown={handleMouseDown}
-          onKeyDown={handleKey} tabIndex={0}
-        >
-          {/* Ocean grid lines */}
-          {[-60,-30,0,30,60].map(lat => {
-            const latR = (lat * Math.PI) / 180;
-            const mercN = Math.log(Math.tan(Math.PI/4 + latR/2));
-            const y = 500/2 - (960 * mercN) / (2 * Math.PI);
-            return <line key={lat} x1={0} y1={y} x2={960} y2={y} stroke={gridColor} strokeWidth={0.5} />;
-          })}
-          {[-150,-120,-90,-60,-30,0,30,60,90,120,150].map(lon => {
-            const x = (lon + 180) * (960/360);
-            return <line key={lon} x1={x} y1={0} x2={x} y2={500} stroke={gridColor} strokeWidth={0.5} />;
-          })}
-          {/* Country fills */}
-          {svgPaths.map((p, i) => p.d ? (
-            <path key={i} d={p.d} fill={p.fill} stroke={p.stroke} strokeWidth={0.3}
-              style={{ cursor: p.data ? "pointer" : "default", transition: "fill 0.15s" }}
-              onMouseEnter={e => p.name && setTooltip({ name: p.name, x: e.clientX, y: e.clientY, data: p.data })}
-              onMouseMove={e => setTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
-              onMouseLeave={() => setTooltip(null)}
-            />
-          ) : null)}
-        </svg>
-
-        {/* Loading overlay */}
-        {!geoData && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: ocean, color: C.muted, fontSize: 13 }}>
-            <span className="spin" style={{ display: "inline-block", width: 16, height: 16, border: `2px solid ${C.accent}`, borderTopColor: "transparent", borderRadius: "50%", marginRight: 8 }} />Loading map...
-          </div>
-        )}
-
-        {/* Legend */}
-        <div style={{ position: "absolute", bottom: 14, left: "50%", transform: "translateX(-50%)", textAlign: "center", pointerEvents: "none" }}>
-          <div style={{ fontSize: 10, color: isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 5 }}>Regulations Tracked</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 11, color: isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)" }}>0</span>
-            <div style={{ width: 180, height: 7, borderRadius: 4, background: isDark ? "linear-gradient(to right,#0a1525,#0a4a3a,#00c896)" : "linear-gradient(to right,#c8d9e8,#40b090,#00a878)" }} />
-            <span style={{ fontSize: 11, color: isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)" }}>40+</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: "bold", marginBottom: 4, color: C.text }}>{action.title}</div>
+          <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.6, marginBottom: 8 }}>{action.description}</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: "bold", ...priorityStyle(action.priority) }}>{action.priority}</span>
+            {action.owner && <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, background: C.border, color: C.muted }}>{"Owner: " + action.owner}</span>}
           </div>
         </div>
+        <span style={{ color: C.muted, fontSize: 11, flexShrink: 0, marginTop: 6, display: "inline-block", transform: open ? "rotate(180deg)" : "none" }}>▼</span>
       </div>
-
-      {/* Tooltip */}
-      {tooltip && (
-        <div style={{ position: "fixed", left: tooltip.x + 14, top: tooltip.y - 12, background: isDark ? "#0f1a2e" : "#ffffff", border: `1px solid ${isDark ? "rgba(0,200,150,0.25)" : "rgba(0,150,100,0.25)"}`, borderRadius: 10, padding: "10px 16px", fontSize: 13, pointerEvents: "none", zIndex: 9999, boxShadow: "0 8px 24px rgba(0,0,0,0.3)", minWidth: 170 }}>
-          <div style={{ fontWeight: 700, color: C.text, marginBottom: 6, fontSize: 14 }}>{tooltip.name}</div>
-          {tooltip.data ? (
-            <>
-              <div style={{ color: C.muted }}>Regulations: <span style={{ color: isDark ? "#00c896" : "#009970", fontWeight: 600 }}>{tooltip.data.total}</span></div>
-              <div style={{ color: C.muted }}>In Scope: <span style={{ color: C.green, fontWeight: 600 }}>{tooltip.data.inScope}</span></div>
-              <div style={{ color: C.muted }}>Coverage: <span style={{ color: C.text, fontWeight: 600 }}>{Math.round(tooltip.data.inScope / tooltip.data.total * 100)}%</span></div>
-            </>
-          ) : <div style={{ color: C.muted, fontStyle: "italic" }}>No regulations mapped</div>}
+      {open && (
+        <div style={{ borderTop: "1px solid " + C.border, padding: "14px 18px 18px 60px" }}>
+          {action.steps && action.steps.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 10 }}>◈ How To Proceed</div>
+              {action.steps.map(function(step, i) {
+                return (
+                  <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 }}>
+                    <div style={{ background: C.accent3 + "33", border: "1px solid " + C.accent3 + "55", color: "#a78bfa", width: 20, height: 20, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: "bold", flexShrink: 0, marginTop: 1 }}>{i + 1}</div>
+                    <div style={{ fontSize: 12, color: C.text, lineHeight: 1.6 }}>{String(step).replace(/^Step \d+:\s*/i, "")}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {action.successCriteria && (
+            <div style={{ background: C.success + "11", border: "1px solid " + C.success + "33", borderRadius: 7, padding: "10px 14px", display: "flex", gap: 10 }}>
+              <span style={{ color: C.success, flexShrink: 0 }}>✓</span>
+              <div>
+                <div style={{ fontSize: 10, letterSpacing: "0.12em", color: C.success, textTransform: "uppercase", marginBottom: 4 }}>Done When</div>
+                <div style={{ fontSize: 12, color: C.text, lineHeight: 1.5 }}>{action.successCriteria}</div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
+// ── SourcesModal ──────────────────────────────────────────────────────────────
 
-function TopControlsChart({ allRegs, scopeMap }) {
-  const inScopeIds = useMemo(() => new Set(Object.entries(scopeMap).filter(([,v]) => v === "In Scope").map(([k]) => k)), [scopeMap]);
-  const controlFreq = useMemo(() => {
-    const counts = {};
-    CONTROLS_LIBRARY.forEach(ctrl => {
-      const inScopeCount = ctrl.regulations.filter(rId => inScopeIds.has(rId)).length;
-      if (inScopeCount > 0) counts[ctrl.title] = { count: inScopeCount, category: ctrl.category, id: ctrl.controlId };
-    });
-    return Object.entries(counts).sort((a,b) => b[1].count - a[1].count).slice(0, 12);
-  }, [inScopeIds]);
+function SourcesModal(props) {
+  var sources = props.sources;
+  var setSources = props.setSources;
+  var onClose = props.onClose;
+  var [editing, setEditing] = useState(null);
+  var [form, setForm] = useState({ icon: "🔗", label: "", url: "", description: "" });
 
-  const maxFreq = controlFreq[0]?.[1]?.count || 1;
-  const catColors = { "Data Privacy": C.indigo, "Financial Crime": C.amber, "Cyber Security": C.blue, "Capital Markets": C.green, "ESG": "#34d399", "Insurance": "#a78bfa", "Operations": "#f87171", "Governance": "#60a5fa" };
-
-  if (inScopeIds.size === 0) return null;
+  function startEdit(src) {
+    setEditing(src.id);
+    setForm({ icon: src.icon || "🔗", label: src.label, url: src.url, description: src.description || "" });
+  }
+  function cancelEdit() { setEditing(null); setForm({ icon: "🔗", label: "", url: "", description: "" }); }
+  function save() {
+    if (editing) {
+      setSources(function(prev) { return prev.map(function(s) { return s.id === editing ? Object.assign({}, s, form) : s; }); });
+    } else {
+      setSources(function(prev) { return prev.concat([Object.assign({ id: Date.now() }, form)]); });
+    }
+    cancelEdit();
+  }
+  var canSave = form.label.trim() && form.url.trim();
 
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 24px", marginTop: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 18 }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>Most Frequently Mandated Controls</div>
-          <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>Controls required by the most in-scope regulations</div>
+    <div className="modal-bg" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.78)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+      onClick={function(e) { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-inner" style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 14, width: "100%", maxWidth: 600, maxHeight: "82vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid " + C.border, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: "bold", color: C.text }}>🔗 Manage Monitored Sources</div>
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 3 }}>Add, edit or remove regulation websites to monitor</div>
+          </div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.muted, fontSize: 20, cursor: "pointer" }}>✕</button>
         </div>
-        <div style={{ fontSize: 12, color: C.muted }}>{controlFreq.length} controls shown</div>
-      </div>
-      {controlFreq.length === 0 ? (
-        <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "24px 0" }}>No in-scope regulations — set scope in the Inventory tab</div>
-      ) : (
-        <div>
-          {controlFreq.map(([title, { count, category }]) => {
-            const col = catColors[category] || C.accent;
-            const pct = (count / maxFreq) * 100;
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 24px" }}>
+          {sources.map(function(src) {
             return (
-              <div key={title} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+              <div key={src.id} style={{ background: "#0a0f1a", border: "1px solid " + (editing === src.id ? C.accent + "66" : C.border), borderRadius: 8, padding: "12px 14px", marginBottom: 8, display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 20, flexShrink: 0 }}>{src.icon}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "75%" }}>{title}</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                      <span style={{ fontSize: 11, color: col, background: `${col}18`, border: `1px solid ${col}30`, borderRadius: 4, padding: "1px 7px", fontWeight: 600 }}>{category}</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: C.text, minWidth: 20, textAlign: "right" }}>{count}</span>
-                    </div>
-                  </div>
-                  <div style={{ height: 7, background: C.panel2, borderRadius: 4, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${pct}%`, background: `linear-gradient(to right, ${col}aa, ${col})`, borderRadius: 4, transition: "width 0.6s ease" }} />
-                  </div>
+                  <div style={{ fontSize: 12, fontWeight: "bold", color: C.text, marginBottom: 2 }}>{src.label}</div>
+                  <div style={{ fontSize: 10, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{src.url}</div>
+                  {src.description && <div style={{ fontSize: 10, color: C.muted, marginTop: 2, fontStyle: "italic" }}>{src.description}</div>}
+                </div>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <button onClick={function() { startEdit(src); }} style={{ background: C.accent + "18", border: "1px solid " + C.accent + "44", color: C.accent, borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>✎ Edit</button>
+                  <button onClick={function() { setSources(function(prev) { return prev.filter(function(s) { return s.id !== src.id; }); }); if (editing === src.id) cancelEdit(); }} style={{ background: C.critical + "18", border: "1px solid " + C.critical + "44", color: C.critical, borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 10, fontFamily: "inherit" }}>✕ Remove</button>
                 </div>
               </div>
             );
           })}
-        </div>
-      )}
-    </div>
-  );
-}
 
-
-function Dashboard({ allRegs, scopeMap, analysisMap, theme }) {
-  const byScope = useMemo(() => { const c = { "In Scope": 0, "Out of Scope": 0, Pending: 0 }; allRegs.forEach(r => { const s = scopeMap[r.id] || "Pending"; if (s in c) c[s]++; }); return c; }, [allRegs, scopeMap]);
-  const analyzed = Object.keys(analysisMap).length;
-  const upcoming = useMemo(() => allRegs.filter(r => { if (!r.deadline) return false; const d = daysUntil(r.deadline); return d !== null && d >= 0 && d <= 180; }).sort((a, b) => new Date(a.deadline) - new Date(b.deadline)).slice(0, 8), [allRegs]);
-  const byDomain = useMemo(() => { const m = {}; allRegs.forEach(r => { if (!m[r.domain]) m[r.domain] = { total: 0, inScope: 0 }; m[r.domain].total++; if ((scopeMap[r.id] || "Pending") === "In Scope") m[r.domain].inScope++; }); return Object.entries(m).sort((a, b) => b[1].total - a[1].total); }, [allRegs, scopeMap]);
-  const byRegion = useMemo(() => { const m = {}; allRegs.forEach(r => { m[r.region] = (m[r.region] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]); }, [allRegs]);
-  const jurisdictionCount = useMemo(() => new Set(allRegs.map(r => r.region)).size, [allRegs]);
-  const countryCount = useMemo(() => new Set(allRegs.flatMap(r => REGION_COUNTRIES[r.region] || [r.region])).size, [allRegs]);
-  return (
-    <div className="fadeIn">
-      <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 26, fontWeight: 800, color: C.text }}>Compliance Posture Dashboard</h1>
-        <p style={{ fontSize: 15, color: C.muted, marginTop: 6 }}>Global regulatory inventory overview for Marsh entities</p>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 24 }}>
-        <StatCard label="Total Regulations" value={allRegs.length} sub={`${analyzed} analyzed`} color="indigo" />
-        <StatCard label="Jurisdictions" value={jurisdictionCount} sub="Regulatory regions" color="indigo" />
-        <StatCard label="Countries" value={countryCount} sub="Nations covered" color="indigo" />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>Regulations by Domain</div>
-          {byDomain.map(([dom, { total, inScope }]) => (
-            <div key={dom} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-              <div style={{ fontSize: 13, color: C.muted, width: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0 }}>{dom}</div>
-              <div style={{ flex: 1, background: C.panel2, borderRadius: 4, height: 6, overflow: "hidden" }}>
-                <div style={{ height: "100%", background: C.accent, borderRadius: 4, width: `${(total / allRegs.length) * 100}%` }} />
+          <div style={{ background: "#0a0f1a", border: "1px solid " + (editing ? C.accent + "55" : C.border), borderRadius: 8, padding: "16px", marginTop: 4 }}>
+            <div style={{ fontSize: 10, color: editing ? C.accent : C.muted, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 12 }}>{editing ? "✎ Editing Source" : "+ Add New Source"}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "56px 1fr", gap: 8, marginBottom: 8 }}>
+              <div>
+                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>Icon</div>
+                <input type="text" maxLength={2} value={form.icon} onChange={function(e) { setForm(function(f) { return Object.assign({}, f, { icon: e.target.value }); }); }} style={{ ...iStyle, textAlign: "center", fontSize: 20, padding: "5px" }} />
               </div>
-              <div style={{ fontSize: 13, color: C.text, width: 28, textAlign: "right", fontWeight: 600 }}>{total}</div>
-              <div style={{ fontSize: 12, color: C.green, width: 80, textAlign: "right" }}>{inScope} in scope</div>
+              <div>
+                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>Label *</div>
+                <input type="text" placeholder="e.g. FCA Handbook" value={form.label} onChange={function(e) { setForm(function(f) { return Object.assign({}, f, { label: e.target.value }); }); }} style={iStyle} />
+              </div>
             </div>
-          ))}
-        </div>
-        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>Upcoming Deadlines (180 days)</div>
-          {upcoming.length === 0 && <div style={{ fontSize: 13, color: C.muted, textAlign: "center", padding: "20px 0" }}>No deadlines in next 180 days</div>}
-          {upcoming.map(r => { const days = daysUntil(r.deadline); return (<div key={r.id} style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, paddingBottom: 10, marginBottom: 10, borderBottom: `1px solid ${C.border}` }}><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div><div style={{ fontSize: 12, color: C.muted }}>{r.region} · {r.domain}</div></div><div style={{ textAlign: "right", flexShrink: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: urgencyColor(days) }}>{formatDeadline(r.deadline)}</div><div style={{ fontSize: 11, color: C.muted }}>{days === 0 ? "Today" : `${days}d`}</div></div></div>); })}
-        </div>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 8 }}>
-        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>Regulations by Region</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {byRegion.map(([reg, cnt]) => (<div key={reg} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}><span style={{ color: C.muted, flex: 1 }}>{reg}</span><span style={{ color: C.text, fontWeight: 600 }}>{cnt}</span></div>))}
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>URL *</div>
+              <input type="text" placeholder="https://..." value={form.url} onChange={function(e) { setForm(function(f) { return Object.assign({}, f, { url: e.target.value }); }); }} style={iStyle} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>Description (optional)</div>
+              <input type="text" placeholder="Brief description" value={form.description} onChange={function(e) { setForm(function(f) { return Object.assign({}, f, { description: e.target.value }); }); }} style={iStyle} />
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={save} disabled={!canSave} style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "8px 18px", borderRadius: 6, cursor: canSave ? "pointer" : "default", fontSize: 11, fontFamily: "inherit", fontWeight: "bold", opacity: canSave ? 1 : 0.4 }}>
+                {editing ? "✓ Save Changes" : "+ Add Source"}
+              </button>
+              {editing && <button onClick={cancelEdit} style={{ background: "transparent", border: "1px solid " + C.border, color: C.muted, padding: "8px 18px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>Cancel</button>}
+            </div>
           </div>
         </div>
-        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>Scope Status</div>
-          {Object.entries(byScope).map(([s, cnt]) => { const pct = allRegs.length ? ((cnt / allRegs.length) * 100).toFixed(0) : 0; const col = { "In Scope": C.green, "Out of Scope": C.red, Pending: C.amber }[s]; return (<div key={s} style={{ marginBottom: 14 }}><div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 5 }}><span style={{ color: C.muted }}>{s}</span><span style={{ color: C.text, fontWeight: 600 }}>{cnt} ({pct}%)</span></div><div style={{ height: 8, background: C.panel2, borderRadius: 4, overflow: "hidden" }}><div style={{ height: "100%", background: col, borderRadius: 4, width: `${pct}%`, transition: "width 0.5s ease" }} /></div></div>); })}
+
+        <div style={{ padding: "14px 24px", borderTop: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 10, color: C.muted }}>{sources.length + " source" + (sources.length !== 1 ? "s" : "") + " configured"}</span>
+          <button onClick={onClose} style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "8px 20px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit", fontWeight: "bold" }}>Done</button>
         </div>
       </div>
-      <WorldHeatmap allRegs={allRegs} scopeMap={scopeMap} theme={theme} />
-      <TopControlsChart allRegs={allRegs} scopeMap={scopeMap} />
     </div>
   );
 }
 
-function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, isAdmin, onAnalyzeClick, ingestedRegs, onUpdateIngested, onClearChanges }) {
-  const [search, setSearch] = useState(""); const [domain, setDomain] = useState("All"); const [region, setRegion] = useState("All"); const [scope, setScope] = useState("All"); const [page, setPage] = useState(1); const [delConfirm, setDelConfirm] = useState(null); const PER = 20;
-  const [sortField, setSortField] = useState("name"); const [sortDir, setSortDir] = useState("asc");
-  const toggleSort = (field) => { if (sortField === field) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortField(field); setSortDir("asc"); } };
-  const [editingReg, setEditingReg] = useState(null); const [editFields, setEditFields] = useState({});
-  const filtered = useMemo(() => { let list = [...allRegs]; if (search) { const q = search.toLowerCase(); list = list.filter(r => r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || (r.tags || []).some(t => t.toLowerCase().includes(q))); } if (domain !== "All") list = list.filter(r => r.domain === domain); if (region !== "All") list = list.filter(r => r.region === region); if (scope !== "All") list = list.filter(r => (scopeMap[r.id] || "Pending") === scope); list.sort((a,b) => { let av = a[sortField]||""; let bv = b[sortField]||""; if (sortField==="deadline") { av=av||"9999"; bv=bv||"9999"; } return sortDir==="asc" ? av.localeCompare(bv) : bv.localeCompare(av); }); return list; }, [allRegs, search, domain, region, scope, scopeMap, sortField, sortDir]);
-  const pages = Math.ceil(filtered.length / PER); const paged = filtered.slice((page - 1) * PER, page * PER);
-  const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "10px 14px", fontSize: 14, outline: "none" };
-  const th = { padding: "13px 14px", fontSize: 12, fontWeight: 700, color: C.muted, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: "0.05em" };
-  const td = { padding: "13px 14px", borderBottom: `1px solid ${C.border}`, verticalAlign: "top" };
-  const confirmDel = (id) => { if (delConfirm === id) { onDelete(id); setDelConfirm(null); } else { setDelConfirm(id); setTimeout(() => setDelConfirm(null), 3000); } };
+// ── ScannerModal ──────────────────────────────────────────────────────────────
+
+function ScannerModal(props) {
+  var scanning = props.scanning;
+  var scanProgress = props.scanProgress;
+  var scanResults = props.scanResults;
+  var onClose = props.onClose;
+  var onRescan = props.onRescan;
+  var onAnalyse = props.onAnalyse;
+  var total = scanResults.reduce(function(t, r) { return t + r.regs.length; }, 0);
+
   return (
-    <div className="fadeIn">
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22, flexWrap: "wrap", gap: 8 }}>
-        <div>
-          <h1 style={{ fontSize: 26, fontWeight: 800, color: C.text }}>Regulation Inventory</h1>
-          <p style={{ fontSize: 14, color: C.muted, marginTop: 5 }}>{filtered.length} regulations {filtered.length !== allRegs.length && `(${allRegs.length} total)`}</p>
-        </div>
-        {isAdmin && <Badge text="Admin Mode" style={{ bg: C.indigoBg, border: C.indigoBorder, color: C.indigo }} />}
-      </div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
-        <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} placeholder="Search regulations, references, tags..." style={{ ...inp, flex: 1, minWidth: 200 }} />
-        <select value={domain} onChange={e => { setDomain(e.target.value); setPage(1); }} style={{ ...inp, cursor: "pointer" }}><option>All</option>{DOMAINS.map(d => <option key={d}>{d}</option>)}</select>
-        <select value={region} onChange={e => { setRegion(e.target.value); setPage(1); }} style={{ ...inp, cursor: "pointer" }}><option>All</option>{["EU", "US", "UK", "APAC", "Global", "Canada", "LATAM", "Middle East", "Africa"].map(r => <option key={r}>{r}</option>)}</select>
-        <select value={scope} onChange={e => { setScope(e.target.value); setPage(1); }} style={{ ...inp, cursor: "pointer" }}><option>All</option><option>In Scope</option><option>Out of Scope</option><option>Pending</option></select>
-      </div>
-      <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
-          <table>
-            <thead style={{ background: C.panel2 }}>
-              <tr>
-                <th style={{ ...th, width: 90, cursor:"pointer" }} onClick={()=>toggleSort("id")}>ID {sortField==="id"?(sortDir==="asc"?"↑":"↓"):"⇅"}</th>
-                <th style={{ ...th, cursor:"pointer" }} onClick={()=>toggleSort("name")}>Regulation {sortField==="name"?(sortDir==="asc"?"↑":"↓"):"⇅"}</th>
-                <th style={{ ...th, width: 90, cursor:"pointer" }} onClick={()=>toggleSort("region")}>Region {sortField==="region"?(sortDir==="asc"?"↑":"↓"):"⇅"}</th>
-                <th style={{ ...th, width: 140, cursor:"pointer" }} onClick={()=>toggleSort("domain")}>Domain {sortField==="domain"?(sortDir==="asc"?"↑":"↓"):"⇅"}</th>
-                <th style={{ ...th, width: 100 }}>Status</th>
-                <th style={{ ...th, width: 110 }}>Scope</th>
-                <th style={{ ...th, width: 140, cursor:"pointer" }} onClick={()=>toggleSort("deadline")}>Deadline {sortField==="deadline"?(sortDir==="asc"?"↑":"↓"):"⇅"}</th>
-                <th style={{ ...th, width: 200 }}>Set Scope</th>
-                <th style={{ ...th, width: 110 }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paged.map(r => {
-                const rs = analysisMap[r.id] ? "Analyzed" : r.status; const cs = scopeMap[r.id] || "Pending"; const days = daysUntil(r.deadline);
-                return (<tr key={r.id}>
-                  <td style={{ ...td, fontFamily: "monospace", fontSize: 12, color: C.muted }}>{r.id}</td>
-                  <td style={td}>
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <div style={{ fontWeight: 600, color: C.text, fontSize: 14, maxWidth: 300 }}>{r.name}</div>
-                          {r.isIngested && <span style={{ fontSize: 10, color: C.indigo, background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, borderRadius: 4, padding: "1px 6px", flexShrink: 0 }}>ingested</span>}
-                          {r.hasChanges && (
-                            <span title="Changes detected — re-analysis recommended" style={{ fontSize: 10, color: C.amber, background: C.amberBg, border: `1px solid ${C.amberBorder}`, borderRadius: 4, padding: "1px 6px", flexShrink: 0, cursor: "default" }}>⚠ updated</span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference}</div>
-                        {r.isIngested && r.sourceTitle && (
-                          <div style={{ fontSize: 11, color: C.indigo, marginTop: 2 }}>↗ {r.sourceTitle}</div>
-                        )}
-                      </div>
-                      {r.isIngested && onUpdateIngested && (
-                        <button onClick={() => { setEditingReg(r); setEditFields({ deadline: r.deadline || "", summary: r.summary || "", effectiveDate: r.effectiveDate || "" }); }} style={{ fontSize: 11, padding: "2px 7px", borderRadius: 5, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer", flexShrink: 0 }} title="Edit regulation details">✎</button>
-                      )}
-                    </div>
-                  </td>
-                  <td style={{ ...td, fontSize: 13 }}>{r.region}</td>
-                  <td style={td}><Badge text={r.domain} /></td>
-                  <td style={td}><Badge text={rs} style={statusStyle(rs)} /></td>
-                  <td style={td}><Badge text={cs} style={scopeStyle(cs)} /></td>
-                  <td style={{ ...td, fontSize: 13, whiteSpace: "nowrap" }}>{r.deadline ? <span style={{ color: urgencyColor(days) }}>{formatDeadline(r.deadline)}{days !== null && days >= 0 && <span style={{ color: C.muted, marginLeft: 4 }}>({days}d)</span>}</span> : <span style={{ color: C.border }}>—</span>}</td>
-                  <td style={td}><div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <select value={cs} onChange={e => onScopeChange(r.id, e.target.value)} style={{ background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 7, padding: "5px 10px", fontSize: 13, cursor: "pointer", outline: "none" }}><option>Pending</option><option>In Scope</option><option>Out of Scope</option></select>
-                    {isAdmin && <button onClick={() => confirmDel(r.id)} style={{ fontSize: 12, padding: "5px 10px", borderRadius: 7, border: `1px solid ${delConfirm === r.id ? C.red : C.border}`, background: delConfirm === r.id ? C.redBg : "transparent", color: delConfirm === r.id ? C.red : C.muted, cursor: "pointer" }}>{delConfirm === r.id ? "Confirm" : "✕"}</button>}
-                  </div></td>
-                  <td style={td}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                      <button onClick={() => onAnalyzeClick(r.id)} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 7, border: `1px solid ${analysisMap[r.id] ? C.indigoBorder : C.border}`, background: analysisMap[r.id] ? C.indigoBg : "transparent", color: analysisMap[r.id] ? C.indigo : C.muted, cursor: "pointer", whiteSpace: "nowrap" }}>⚡ {analysisMap[r.id] ? "View Analysis" : "Analyze"}</button>
-                      {r.hasChanges && analysisMap[r.id] && (
-                        <button onClick={() => { if (onClearChanges) onClearChanges(r.id); onAnalyzeClick(r.id); }} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.amberBorder}`, background: C.amberBg, color: C.amber, cursor: "pointer", whiteSpace: "nowrap" }}>↻ Re-analyze</button>
-                      )}
-                    </div>
-                  </td>
-                </tr>);
-              })}
-              {paged.length === 0 && <tr><td colSpan={9} style={{ ...td, textAlign: "center", color: C.muted, padding: "56px 0" }}>No regulations match your filters</td></tr>}
-            </tbody>
-          </table>
-        </div>
-              {/* Edit Ingested Regulation Modal */}
-      {editingReg && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setEditingReg(null)}>
-          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 16, padding: 28, width: 540, maxWidth: "90vw" }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 700, fontSize: 16, color: C.text, marginBottom: 4 }}>Edit Regulation</div>
-            <div style={{ fontSize: 13, color: C.indigo, marginBottom: 18 }}>{editingReg.name}</div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display: "block", fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Deadline (YYYY-MM-DD)</label>
-              <input value={editFields.deadline} onChange={e => setEditFields(f => ({ ...f, deadline: e.target.value }))} placeholder="2025-12-31" style={{ width: "100%", background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 8, padding: "10px 14px", fontSize: 14, outline: "none" }} />
+    <div className="modal-bg" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+      onClick={function(e) { if (e.target === e.currentTarget && !scanning) onClose(); }}>
+      <div className="modal-inner" style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 14, width: "100%", maxWidth: 800, maxHeight: "88vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid " + C.border, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: "bold", color: C.text }}>⟳ Regulatory Horizon Scan</div>
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 3 }}>
+              {scanning ? "Scanning sources for regulations..." : (total + " regulations found across " + scanResults.length + " sources")}
             </div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display: "block", fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Effective Date (YYYY-MM-DD)</label>
-              <input value={editFields.effectiveDate} onChange={e => setEditFields(f => ({ ...f, effectiveDate: e.target.value }))} placeholder="2024-01-01" style={{ width: "100%", background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 8, padding: "10px 14px", fontSize: 14, outline: "none" }} />
-            </div>
+          </div>
+          {!scanning && <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.muted, fontSize: 20, cursor: "pointer" }}>✕</button>}
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 24px" }}>
+          {scanProgress.length > 0 && (
             <div style={{ marginBottom: 20 }}>
-              <label style={{ display: "block", fontSize: 12, color: C.muted, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Summary / Key Changes</label>
-              <textarea value={editFields.summary} onChange={e => setEditFields(f => ({ ...f, summary: e.target.value }))} rows={4} style={{ width: "100%", background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 8, padding: "10px 14px", fontSize: 14, outline: "none", resize: "vertical", fontFamily: "inherit" }} />
+              {scanProgress.map(function(p, i) {
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#0a0f1a", borderRadius: 7, marginBottom: 6, border: "1px solid " + C.border }}>
+                    <span>{p.status === "scanning" ? "↻" : p.status === "done" ? "✓" : "⚠"}</span>
+                    <span style={{ fontSize: 12, color: C.text, flex: 1 }}>{p.source}</span>
+                    <span style={{ fontSize: 11, color: p.status === "done" ? C.success : p.status === "error" ? C.critical : C.accent }}>
+                      {p.status === "scanning" ? "Scanning..." : p.status === "done" ? (p.count + " found") : "Error"}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button onClick={() => setEditingReg(null)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 14, cursor: "pointer" }}>Cancel</button>
-              <button onClick={() => { onUpdateIngested(editingReg.id, editFields); setEditingReg(null); }} style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: C.accent, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Save Changes</button>
-            </div>
-          </div>
+          )}
+
+          {scanResults.map(function(result, si) {
+            return (
+              <div key={si} style={{ marginBottom: 24 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid " + C.border }}>
+                  <span style={{ fontSize: 18 }}>{result.sourceIcon}</span>
+                  <span style={{ fontSize: 12, fontWeight: "bold", color: C.text }}>{result.sourceLabel}</span>
+                  {result.error
+                    ? <span style={{ fontSize: 10, color: C.critical, marginLeft: "auto" }}>{"⚠ " + result.error}</span>
+                    : <span style={{ fontSize: 10, color: C.success, marginLeft: "auto" }}>{result.regs.length + " regulation" + (result.regs.length !== 1 ? "s" : "") + " found"}</span>}
+                </div>
+                {result.regs.length === 0 && !result.error && (
+                  <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", paddingLeft: 8 }}>No regulations identified on this page.</div>
+                )}
+                {result.regs.map(function(reg, ri) {
+                  var statusColor = { "In Force": C.success, "Proposed": C.warning, "Consultation": C.accent, "Upcoming": "#a78bfa" }[reg.status] || C.muted;
+                  return (
+                    <div key={ri} style={{ background: "#0a0f1a", border: "1px solid " + C.border, borderRadius: 8, padding: "12px 16px", marginBottom: 8, display: "flex", gap: 12, alignItems: "flex-start" }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                          <div style={{ fontSize: 12, fontWeight: "bold", color: C.text, lineHeight: 1.4 }}>{reg.title}</div>
+                          <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+                            {reg.type && <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 3, background: C.accent3 + "22", border: "1px solid " + C.accent3 + "44", color: "#a78bfa", fontWeight: "bold", whiteSpace: "nowrap" }}>{reg.type}</span>}
+                            {reg.status && <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 3, background: statusColor + "22", border: "1px solid " + statusColor + "44", color: statusColor, fontWeight: "bold", whiteSpace: "nowrap" }}>{reg.status}</span>}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, lineHeight: 1.5 }}>{reg.summary}</div>
+                        <div style={{ display: "flex", gap: 10 }}>
+                          {reg.reference && <span style={{ fontSize: 10, color: C.accent, fontWeight: "bold" }}>{reg.reference}</span>}
+                          {reg.jurisdiction && <span style={{ fontSize: 10, color: C.muted }}>{reg.jurisdiction}</span>}
+                        </div>
+                      </div>
+                      <button onClick={function() { onAnalyse(reg); }}
+                        style={{ background: C.accent + "18", border: "1px solid " + C.accent + "44", color: C.accent, borderRadius: 5, padding: "5px 10px", cursor: "pointer", fontSize: 10, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
+                        + Analyse
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
-      )}
-      {pages > 1 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>
-          <span style={{ fontSize: 13, color: C.muted }}>Page {page} of {pages} — {filtered.length} results</span>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} style={{ padding: "6px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, fontSize: 13, cursor: "pointer", opacity: page === 1 ? 0.4 : 1 }}>Prev</button>
-            <button onClick={() => setPage(p => Math.min(pages, p + 1))} disabled={page === pages} style={{ padding: "6px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, fontSize: 13, cursor: "pointer", opacity: page === pages ? 0.4 : 1 }}>Next</button>
+
+        {!scanning && scanResults.length > 0 && (
+          <div style={{ padding: "14px 24px", borderTop: "1px solid " + C.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 10, color: C.muted }}>Click + Analyse on any regulation to run a full MMC compliance analysis</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={onRescan} style={{ background: C.accent3 + "22", border: "1px solid " + C.accent3 + "55", color: "#a78bfa", padding: "7px 16px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>↻ Re-scan</button>
+              <button onClick={onClose} style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "7px 16px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit", fontWeight: "bold" }}>Done</button>
+            </div>
           </div>
-        </div>}
+        )}
       </div>
     </div>
   );
 }
 
-function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComplete, initialRegId, onAnalyzeDone, savedUrls: externalUrls, onSaveUrls, ingestedRegs, onIngest, onUpdateIngested }) {
-  const [selected, setSelected] = useState(initialRegId || "");
-  const [searchQ, setSearchQ] = useState(""); const [showDropdown, setShowDropdown] = useState(false);
-  const [loading, setLoading] = useState(false); const [error, setError] = useState(""); const [result, setResult] = useState(null);
-  // File upload state
-  const [uploadedFile, setUploadedFile] = useState(null);
-  const [fileContent, setFileContent] = useState("");
-  const [fileResult, setFileResult] = useState(null); // current file's analysis result
-  const [viewingFileResult, setViewingFileResult] = useState(null); // for "View Analysis" navigation
-  // URL management state - always backed by remote store via onSaveUrls
-  const [localUrls, setLocalUrls] = useState(externalUrls || storage.get("delphi_urls", []));
-  // Keep local copy in sync when external changes (e.g. after remote sync)
-  useEffect(() => { if (externalUrls) setLocalUrls(externalUrls); }, [externalUrls]);
-  const urls = localUrls;
-  const setUrls = (newList) => {
-    setLocalUrls(newList);
-    if (onSaveUrls) onSaveUrls(newList); // persists to JSONBin + localStorage
-    else storage.set("delphi_urls", newList);
-  };
-  const [newUrl, setNewUrl] = useState(""); const [newTitle, setNewTitle] = useState(""); const [editingUrl, setEditingUrl] = useState(null); const [editVal, setEditVal] = useState(""); const [editTitleVal, setEditTitleVal] = useState("");
-  const [collapsedUrls, setCollapsedUrls] = useState({});
-  const toggleCollapse = (id) => setCollapsedUrls(p => ({ ...p, [id]: !p[id] }));
-  const [crawling, setCrawling] = useState(null);
-  const [urlResults, setUrlResults] = useState(() => {
-    // Restore persisted scan results from saved URLs
-    const init = {};
-    (externalUrls || storage.get("delphi_urls", [])).forEach(u => {
-      if (u.scanResult) init[u.id] = u.scanResult;
-    });
-    return init;
-  });
-  const [activeTab, setActiveTab] = useState("regulation"); // regulation | file | url | bulk
-  const [bulkSelected, setBulkSelected] = useState(new Set());
-  const [bulkRunning, setBulkRunning] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0, current: "", errors: [] });
-  const [bulkFilter, setBulkFilter] = useState("All"); // All | In Scope | Pending | Not Analyzed
+// ── UploadZone ────────────────────────────────────────────────────────────────
 
-  const reg = allRegs.find(r => r.id === selected);
-  // When viewing a file/url result on regulation tab, show that result
-  useEffect(() => {
-    if (activeTab !== "regulation") setViewingFileResult(null);
-  }, [activeTab]);
-  useEffect(() => { if (initialRegId) { setSelected(initialRegId); setActiveTab("regulation"); if (onAnalyzeDone) onAnalyzeDone(); } }, [initialRegId]);
-  useEffect(() => { setResult(selected && analysisMap[selected] ? analysisMap[selected] : null); }, [selected, analysisMap]);
-  const filteredRegs = useMemo(() => { if (!searchQ) return allRegs; const q = searchQ.toLowerCase(); return allRegs.filter(r => r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.id.toLowerCase().includes(q)); }, [allRegs, searchQ]);
-  const selectReg = (id) => { setSelected(id); setSearchQ(""); setShowDropdown(false); };
-  const inScopeIds = useMemo(() => new Set(Object.entries(scopeMap).filter(([, v]) => v === "In Scope").map(([k]) => k)), [scopeMap]);
-
-  const saveUrls = (newList) => setUrls(newList);
-  const addUrl = () => {
-    if (!newUrl.trim()) return;
-    const u = newUrl.trim().startsWith("http") ? newUrl.trim() : "https://" + newUrl.trim();
-    const title = newTitle.trim() || u;
-    saveUrls([...urls, { id: Date.now(), url: u, label: u, title, added: new Date().toISOString() }]);
-    setNewUrl(""); setNewTitle("");
-  };
-  const deleteUrl = (id) => {
-    setUrlResults(prev => { const n = {...prev}; delete n[id]; return n; });
-    saveUrls(urls.filter(u => u.id !== id));
-  };
-  const startEdit = (u) => { setEditingUrl(u.id); setEditVal(u.label || u.url); setEditTitleVal(u.title || u.label || u.url); };
-  const saveEdit = (id) => { saveUrls(urls.map(u => u.id === id ? { ...u, label: editVal, title: editTitleVal } : u)); setEditingUrl(null); };
-
-  const crawlUrl = async (urlObj) => {
-    setCrawling(urlObj.id);
-    // Update URL entry to show scanning status (persisted)
-    const updatedWithStatus = urls.map(u => u.id === urlObj.id ? { ...u, scanStatus: "scanning", lastScanned: new Date().toISOString() } : u);
-    setUrls(updatedWithStatus);
-    setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "loading", summary: "Step 1/3: Fetching page and identifying regulations..." } }));
-
-    try {
-      // Step 1: Scan the root URL and find regulations + hyperlinks
-      const step1Res = await fetch(PROXY_URL, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-5", max_tokens: 4000,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-          messages: [{ role: "user", content: `You are a regulatory compliance analyst. Search for and analyze: ${urlObj.url}
-
-TASK:
-1. Fetch and read the content at this URL
-2. Identify all regulations, laws, directives, or compliance requirements mentioned
-3. Find all hyperlinks on the page that point to specific regulation documents (look for links containing words like: regulation, directive, law, act, rule, compliance, guidance, circular, notice)
-4. For each regulation found directly on the page OR linked from the page, extract full details
-
-Return ONLY this JSON (no markdown):
-{"type":"regulation|site","siteDescription":"what this page is about","regulations":[{"name":"Full name","reference":"Official citation","jurisdiction":"Country/region","domain":"e.g. Data Privacy","summary":"Key obligations in 2-3 sentences","effectiveDate":"YYYY-MM-DD or empty","deadline":"YYYY-MM-DD or empty","sourceUrl":"direct URL to this specific regulation if found"}],"regulationLinks":["url1","url2","url3"]}
-
-regulationLinks should contain up to 10 URLs from the page that likely lead to specific regulation documents. Always populate regulations with whatever you find directly on the page first.` }]
-        })
-      });
-      const d1 = await step1Res.json();
-      const t1 = (d1.content || []).filter(b => b.type === "text").map(b => b.text).join("").replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/,"").trim();
-      let parsed1;
-      try { parsed1 = JSON.parse(t1); } catch { const m = t1.match(/\{[\s\S]*\}/); try { parsed1 = m ? JSON.parse(m[0]) : null; } catch { parsed1 = null; } }
-
-      if (!parsed1) {
-        setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "error", summary: "Could not parse response. Try a more specific regulation URL." } }));
-        setCrawling(null); return;
-      }
-
-      // Show initial results immediately
-      setUrlResults(prev => ({ ...prev, [urlObj.id]: { ...parsed1, crawling: true, summary: `Found ${parsed1.regulations?.length || 0} regulations. Crawling ${parsed1.regulationLinks?.length || 0} linked pages...` } }));
-
-      // Step 2: Deep crawl linked regulation pages
-      const links = (parsed1.regulationLinks || []).slice(0, 6); // max 6 deep links
-      let allRegsFound = [...(parsed1.regulations || [])];
-
-      if (links.length > 0) {
-        setUrlResults(prev => ({ ...prev, [urlObj.id]: { ...parsed1, crawling: true, summary: `Step 2/3: Deep crawling ${links.length} regulation links...` } }));
-
-        const deepRes = await fetch(PROXY_URL, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-5", max_tokens: 4000,
-            tools: [{ type: "web_search_20250305", name: "web_search" }],
-            messages: [{ role: "user", content: `You are a regulatory compliance analyst. I need you to fetch and analyze each of these regulation URLs and extract full compliance details from each one:
-
-${links.map((l, i) => `${i + 1}. ${l}`).join("\\n")}
-
-For each URL, fetch the content and extract the regulation details. Return ONLY this JSON:
-{"regulations":[{"name":"Full regulation name","reference":"Official citation","jurisdiction":"Country/region","domain":"Regulatory domain","summary":"Key obligations 2-3 sentences","effectiveDate":"YYYY-MM-DD or empty","deadline":"YYYY-MM-DD or empty","sourceUrl":"the URL you fetched"}]}
-
-Include ALL regulations found across all URLs. Deduplicate if the same regulation appears in multiple links.` }]
-          })
-        });
-
-        const d2 = await deepRes.json();
-        const t2 = (d2.content || []).filter(b => b.type === "text").map(b => b.text).join("").replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/,"").trim();
-        let parsed2;
-        try { parsed2 = JSON.parse(t2); } catch { const m = t2.match(/\{[\s\S]*\}/); try { parsed2 = m ? JSON.parse(m[0]) : null; } catch { parsed2 = null; } }
-        if (parsed2?.regulations?.length > 0) {
-          // Merge, deduplicate by reference
-          const existing = new Set(allRegsFound.map(r => r.reference));
-          parsed2.regulations.forEach(r => { if (!existing.has(r.reference)) { allRegsFound.push(r); existing.add(r.reference); } });
-        }
-      }
-
-      // Step 3: Final result
-      const finalResult = {
-        type: parsed1.type,
-        siteDescription: parsed1.siteDescription,
-        regulations: allRegsFound,
-        regulationLinks: links,
-        crawledAt: new Date().toISOString(),
-        crawling: false,
-      };
-
-      setUrlResults(prev => ({ ...prev, [urlObj.id]: finalResult }));
-
-      // Persist scan results alongside the URL
-      const finalUrls = urls.map(u => u.id === urlObj.id
-        ? { ...u, scanStatus: "done", lastScanned: new Date().toISOString(), scanResult: finalResult }
-        : u
-      );
-      setUrls(finalUrls);
-
-    } catch (e) {
-      setUrlResults(prev => ({ ...prev, [urlObj.id]: { type: "error", summary: e.message } }));
-      const errUrls = urls.map(u => u.id === urlObj.id ? { ...u, scanStatus: "error" } : u);
-      setUrls(errUrls);
+function UploadZone(props) {
+  var onFile = props.onFile;
+  var uploading = props.uploading;
+  async function processFile(file) {
+    if (!file) return;
+    var name = file.name.replace(/\.[^/.]+$/, "");
+    if (file.type === "application/pdf") {
+      onFile(name, null, file);
+    } else {
+      var text = await file.text();
+      onFile(name, text, null);
     }
-    setCrawling(null);
-  };
+  }
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 5 }}>
+        {uploading ? "⏳ Extracting text..." : "☁ Upload File (PDF · TXT · MD)"}
+      </div>
+      <input type="file" accept=".txt,.pdf,.md,.doc,.docx" disabled={uploading}
+        onChange={function(e) { var f = e.target.files && e.target.files[0]; if (f) processFile(f); e.target.value = ""; }}
+        style={{ display: "block", width: "100%", fontSize: 11, color: C.muted, background: "#0a0f1acc", border: "1px solid " + C.border, borderRadius: 7, padding: "8px 10px", fontFamily: "inherit", cursor: "pointer", boxSizing: "border-box" }} />
+    </div>
+  );
+}
 
+// ── Main App ──────────────────────────────────────────────────────────────────
 
-  // Run full analysis on a regulation found via URL scan
-  const analyzeScannedReg = async (scannedReg, regKey) => {
-    setActiveTab("regulation");
-    setResult(null);
-    setLoading(true); setError("");
+export default function App() {
+  var [regulations, setRegulations] = useState(function() { return loadRegs(); });
+  var [inputTitle, setInputTitle] = useState("");
+  var [inputText, setInputText] = useState("");
+  var [selected, setSelected] = useState(null);
+  var [analyzing, setAnalyzing] = useState(false);
+  var [uploading, setUploading] = useState(false);
+  var [activeTab, setActiveTab] = useState("summary");
+  var [openActions, setOpenActions] = useState({});
+  var [urlInput, setUrlInput] = useState("");
+  var [fetchingUrl, setFetchingUrl] = useState(false);
+  var [urlError, setUrlError] = useState("");
+  var [sources, setSources] = useState(function() {
     try {
-      const fakeReg = {
-        name: scannedReg.name, reference: scannedReg.reference,
-        region: scannedReg.jurisdiction, domain: scannedReg.domain || "Compliance",
-        summary: scannedReg.summary, effectiveDate: scannedReg.effectiveDate || "",
-        deadline: scannedReg.deadline || "", marshEntities: [],
-      };
-      const thisRegControls = CONTROLS_LIBRARY.filter(c => c.regulations.includes(selected));
-      const otherControls = CONTROLS_LIBRARY.filter(c => !c.regulations.includes(selected) && c.regulations.some(rId => inScopeIds.has(rId)));
-      const prompt = `You are a regulatory compliance expert. Respond with ONLY a valid JSON object - no markdown, no backticks, no text outside JSON. No newlines inside string values.
+      var stored = localStorage.getItem("delphi_sources");
+      if (!stored) {
+        // First time — save defaults immediately so they persist
+        localStorage.setItem("delphi_sources", JSON.stringify(DEFAULT_SOURCES));
+        return DEFAULT_SOURCES;
+      }
+      // Return whatever is stored — user controls additions and deletions
+      return JSON.parse(stored);
+    } catch(e) {
+      return DEFAULT_SOURCES;
+    }
+  });
+  var [showSources, setShowSources] = useState(false);
+  var [scanning, setScanning] = useState(false);
+  var [scanResults, setScanResults] = useState([]);
+  var [scanProgress, setScanProgress] = useState([]);
+  var [showScanner, setShowScanner] = useState(false);
+  var [showMobileSidebar, setShowMobileSidebar] = useState(false);
+  var [mobileView, setMobileView] = useState("home"); // "home" | "detail"
 
-Regulation: ${fakeReg.name} (${fakeReg.reference}) | ${fakeReg.region} | ${fakeReg.domain}
-Summary: ${fakeReg.summary}
-Marsh entities in scope: Unknown - assess based on regulation content and jurisdiction
+  function updateSources(updater) {
+    setSources(function(prev) {
+      var next = typeof updater === "function" ? updater(prev) : updater;
+      try {
+        localStorage.setItem("delphi_sources", JSON.stringify(next));
+      } catch(e) {
+        console.warn("Could not save sources to localStorage:", e);
+      }
+      return next;
+    });
+  }
 
-Controls ALREADY MAPPED: ${thisRegControls.map(c => c.title).join(", ") || "None"}
-Controls from other in-scope regulations: ${otherControls.map(c => c.title).join(", ") || "None"}
+  async function handleFileUpload(name, text, pdfFile) {
+    setInputTitle(name);
+    if (pdfFile) {
+      setUploading(true);
+      try {
+        if (!window.pdfjsLib) {
+          await new Promise(function(res, rej) {
+            var s = document.createElement("script");
+            s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+            s.onload = res; s.onerror = rej;
+            document.head.appendChild(s);
+          });
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = "";
+        }
+        var buf = await pdfFile.arrayBuffer();
+        var pdf = await window.pdfjsLib.getDocument({ data: buf, useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true }).promise;
+        var pages = [];
+        for (var i = 1; i <= pdf.numPages; i++) {
+          var page = await pdf.getPage(i);
+          var tc = await page.getTextContent();
+          pages.push(tc.items.map(function(it) { return it.str; }).join(" "));
+        }
+        var extracted = pages.join("\n\n").trim();
+        setInputText(extracted || "[No text extracted — please paste manually]");
+      } catch(e) {
+        setInputText("[Could not extract PDF — please paste text manually]");
+      }
+      setUploading(false);
+    } else {
+      setInputText(text);
+    }
+  }
 
-Return this exact JSON (string values max 25 words, reasons max 10 words):
-{"executiveSummary":"2 sentence summary","businessRisk":"High","riskRationale":"one sentence","keyObligations":["obligation 1","obligation 2","obligation 3"],"marshScope":[{"entity":"Marsh (Parent)","inScope":true,"reason":"short reason"},{"entity":"Marsh Risk","inScope":true,"reason":"short reason"},{"entity":"Guy Carpenter / Marsh Re","inScope":false,"reason":"short reason"},{"entity":"Mercer","inScope":false,"reason":"short reason"},{"entity":"Oliver Wyman","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Limited (UK)","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Ireland","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Asset Management LLC","inScope":false,"reason":"short reason"},{"entity":"Victor Insurance","inScope":false,"reason":"short reason"},{"entity":"McGriff Insurance Services","inScope":false,"reason":"short reason"}],"allControls":[{"title":"name","description":"what to do","priority":"Immediate","isNew":true}],"gapAnalysis":"one paragraph","deadlineRisk":"one sentence or empty string","recommendedActions":["action 1","action 2","action 3"]}
+  async function fetchFromUrl(url) {
+    if (!url.trim()) return;
+    setFetchingUrl(true);
+    setUrlError("");
+    try {
+      var domain = url;
+      try { domain = new URL(url).hostname.replace("www.", ""); } catch(e) {}
+      var prompt = "Search for regulations and legislation published on " + domain + ". The page URL is: " + url + ". Find all named regulations, directives, acts, or consultations available there. List them with their titles, reference numbers, and brief descriptions. Write your findings as plain descriptive text.";
+      var raw = await apiCall([{ role: "user", content: prompt }], 2000, true);
+      if (!raw.trim()) throw new Error("No content returned.");
+      setInputTitle("Regulations from " + domain);
+      setInputText(raw);
+    } catch(err) {
+      var msg = err.message || "";
+      if (msg === "LIMIT_EXCEEDED") {
+        setUrlError(limitMsg());
+      } else {
+        setUrlError("Could not retrieve content. Try copying and pasting the regulation text manually.");
+      }
+    }
+    setFetchingUrl(false);
+  }
 
-Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allControls=ALL controls needed. marshScope must have all 12 entities. Output ONLY raw JSON.`;
+  async function scanAllSources() {
+    if (!sources.length) return;
+    setScanning(true);
+    setShowScanner(true);
+    setScanResults([]);
+    setScanProgress([]);
 
-      const res = await fetch(PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 4000, messages: [{ role: "user", content: prompt }] }) });
-      const data = await res.json();
-      const raw = data.content?.[0]?.text || "";
-      const text = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
-      let parsed;
-      try { parsed = JSON.parse(text); }
-      catch { const m = text.match(/\{[\s\S]*\}/); try { parsed = JSON.parse(m?.[0]); } catch { parsed = { executiveSummary: "Parse error — retry.", businessRisk: "Medium", riskRationale: "", keyObligations: [], newControls: [], gapAnalysis: "", deadlineRisk: "", recommendedActions: [] }; } }
-      // Store in analysisMap if we have a regKey
-      if (regKey) onAnalysisComplete(regKey, parsed);
-      setActiveTab("url"); // stay on URL tab to show result
-      setResult(null); // clear main result so we don't show it below
-      // Update URL results to show analysis for this reg
-      setUrlResults(prev => {
-        const updated = { ...prev };
-        // Find which URL this reg belongs to and mark it analyzed
-        Object.keys(updated).forEach(uid => {
-          const res = updated[uid];
-          if (res?.regulations) {
-            updated[uid] = { ...res, regulations: res.regulations.map(r => {
-              const rk = "URL:" + (r.reference || r.name).replace(/[^a-zA-Z0-9]/g, "_").substring(0, 40);
-              return rk === regKey ? { ...r, _analyzed: true } : r;
-            })};
-          }
-        });
+    for (var i = 0; i < sources.length; i++) {
+      var src = sources[i];
+      var srcLabel = src.label;
+      setScanProgress(function(prev) { return prev.concat([{ source: srcLabel, status: "scanning" }]); });
+      try {
+        var domain = src.url;
+        try { domain = new URL(src.url).hostname.replace("www.", ""); } catch(e) {}
+        var prompt = "You are a regulatory horizon scanning assistant. Search the website " + domain + " (URL: " + src.url + ") and identify all regulations, directives, legislative acts, and consultations listed there. For each one found provide: title (full name), type (one of: Regulation, Directive, Consultation, Guidance), reference (the official number e.g. 2022/2554/EU, or empty string), status (one of: In Force, Proposed, Consultation, Upcoming), summary (one sentence description), jurisdiction (region or country). Return ONLY a raw JSON array with no markdown. Example format: [{\"title\":\"...\",\"type\":\"...\",\"reference\":\"...\",\"status\":\"...\",\"summary\":\"...\",\"jurisdiction\":\"...\"}]. If nothing found return [].";
+        var raw = await apiCall([{ role: "user", content: prompt }], 3000, true);
+        var regs = [];
+        try {
+          var match = raw.match(/\[[\s\S]*\]/);
+          if (match) regs = JSON.parse(match[0]);
+        } catch(e) { regs = []; }
+        var count = regs.length;
+        setScanResults(function(prev) { return prev.concat([{ sourceId: src.id, sourceLabel: src.label, sourceIcon: src.icon, regs: regs, error: null }]); });
+        setScanProgress(function(prev) { return prev.map(function(p) { return p.source === srcLabel ? { source: p.source, status: "done", count: count } : p; }); });
+      } catch(err) {
+        var errMsg = err.message === "LIMIT_EXCEEDED" ? "Usage limit reached — try again later" : (err.message || "Unknown error");
+        var capturedLabel = srcLabel;
+        setScanResults(function(prev) { return prev.concat([{ sourceId: src.id, sourceLabel: src.label, sourceIcon: src.icon, regs: [], error: errMsg }]); });
+        setScanProgress(function(prev) { return prev.map(function(p) { return p.source === capturedLabel ? { source: p.source, status: "error" } : p; }); });
+      }
+    }
+    setScanning(false);
+  }
+
+  async function analyzeRegulation(reg) {
+    setAnalyzing(true);
+    var pending = Object.assign({}, reg, { loading: true });
+    setSelected(pending);
+    setRegulations(function(prev) { return [pending].concat(prev.filter(function(r) { return r.id !== reg.id; })); });
+    setOpenActions({});
+
+    var truncated = reg.text.length > 4000 ? reg.text.slice(0, 4000) + "..." : reg.text;
+    var prompt = "You are a regulatory compliance expert. Analyze the regulation below and respond with ONLY a valid JSON object. No prose, no markdown, no backticks.\n\nREGULATION TEXT:\n" + truncated + "\n\nReturn this exact JSON (values under 40 words except verbatim legislative fields):\n{\"instrumentType\":\"Regulation or Directive\",\"fullName\":\"Full official name\",\"referenceNumber\":\"e.g. 2022/2554/EU\",\"summary\":\"One sentence\",\"jurisdiction\":\"region\",\"impactAreas\":[\"area1\",\"area2\"],\"chapters\":[{\"number\":\"Chapter I\",\"title\":\"title\"}],\"transitionalPeriod\":\"Verbatim text of article titled Transitional Period or N/A\",\"transpositionDate\":\"Verbatim text of article titled Transposition or N/A\",\"repealOfLegislation\":\"Verbatim text of article titled Repeal or N/A\",\"entryIntoForce\":\"Verbatim text of article titled Entry into force or N/A\",\"effectiveDate\":\"date or TBD\",\"deadline\":\"deadline or Ongoing\",\"riskLevel\":\"Critical\",\"mmcRisk\":{\"rating\":\"Critical\",\"score\":9,\"summary\":\"sentence\",\"financialExposure\":\"sentence\",\"reputationalExposure\":\"sentence\",\"operationalExposure\":\"sentence\",\"mitigatingFactors\":[\"factor1\"]},\"mmcScope\":[{\"entity\":\"name\",\"inScope\":true,\"reason\":\"sentence\"}],\"controls\":[{\"controlId\":\"CTRL-001\",\"title\":\"Short control name\",\"description\":\"What the control requires\",\"category\":\"Governance or Risk or Compliance or Technology or Operational or Reporting\",\"priority\":\"Immediate or Short-term or Ongoing\",\"owner\":\"Responsible team\",\"steps\":[\"Implementation step 1\",\"Implementation step 2\",\"Implementation step 3\"],\"testingCriteria\":\"How to verify the control is operating effectively\",\"articleReference\":\"Article or Section reference\"}]}\n\nRules: instrumentType exactly Regulation or Directive. chapters top-level only. riskLevel and mmcRisk.rating: Critical/High/Medium/Low. mmcRisk.score 1-10. priority: Immediate/Short-term/Ongoing. 6-10 controls with 3-5 steps each. controlId must be unique sequential e.g. CTRL-001. Output ONLY raw JSON.";
+
+    try {
+      var raw = await apiCall([{ role: "user", content: prompt }]);
+      var match = raw.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("No JSON found. Got: " + raw.slice(0, 200));
+      var analysis = JSON.parse(match[0]);
+      var enriched = Object.assign({}, reg, { analysis: analysis, loading: false, savedAt: reg.savedAt || Date.now(), inScope: reg.inScope || false });
+      setRegulations(function(prev) {
+        var updated = prev.map(function(r) { return r.id === reg.id ? enriched : r; });
+        saveRegs(updated);
         return updated;
       });
-    } catch(e) { setError(e.message); }
-    finally { setLoading(false); }
-  };
-
-  const handleFile = (e) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    setUploadedFile(file);
-    const reader = new FileReader();
-    reader.onload = (ev) => setFileContent(ev.target.result);
-    if (file.type === "application/pdf") reader.readAsDataURL(file);
-    else reader.readAsText(file);
-  };
-
-  const buildPrompt = (regData, summaryOverride) => {
-    const thisRegControls = CONTROLS_LIBRARY.filter(c => c.regulations.includes(selected));
-    const otherControls = CONTROLS_LIBRARY.filter(c => !c.regulations.includes(selected) && c.regulations.some(rId => inScopeIds.has(rId)));
-    return `You are a regulatory compliance expert. Respond with ONLY a valid JSON object - no markdown, no backticks, no text outside JSON. No newlines inside string values.
-
-Regulation: ${regData.name} | ${regData.region || "Unknown"} | ${regData.domain || "Unknown"}
-Summary: ${summaryOverride || regData.summary || "See uploaded content"}
-Marsh entities in scope: ${(regData.marshEntities || []).join(", ") || "Unknown - assess based on regulation content"}
-
-Controls ALREADY MAPPED to this regulation: ${thisRegControls.map(c => c.title).join(", ") || "None"}
-Controls from other in-scope regulations: ${otherControls.map(c => c.title).join(", ") || "None"}
-
-Return this exact JSON (string values max 25 words, reasons max 10 words):
-{"executiveSummary":"2 sentence summary","businessRisk":"High","riskRationale":"one sentence","keyObligations":["obligation 1","obligation 2","obligation 3"],"marshScope":[{"entity":"Marsh (Parent)","inScope":true,"reason":"short reason"},{"entity":"Marsh Risk","inScope":true,"reason":"short reason"},{"entity":"Guy Carpenter / Marsh Re","inScope":false,"reason":"short reason"},{"entity":"Mercer","inScope":false,"reason":"short reason"},{"entity":"Oliver Wyman","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Limited (UK)","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Ireland","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Asset Management LLC","inScope":false,"reason":"short reason"},{"entity":"Victor Insurance","inScope":false,"reason":"short reason"},{"entity":"McGriff Insurance Services","inScope":false,"reason":"short reason"}],"allControls":[{"title":"name","description":"what to do","priority":"Immediate","isNew":true}],"gapAnalysis":"one paragraph","deadlineRisk":"one sentence or empty string","recommendedActions":["action 1","action 2","action 3"]}
-
-Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allControls=ALL controls for this regulation (isNew:false if already mapped, isNew:true if new gap). marshScope must have all 12 entities. Output ONLY raw JSON.`;
-  };
-
-  const runBulkAnalysis = async () => {
-    if (bulkSelected.size === 0 || bulkRunning) return;
-    setBulkRunning(true);
-    const ids = [...bulkSelected];
-    setBulkProgress({ done: 0, total: ids.length, current: "", errors: [] });
-    for (let i = 0; i < ids.length; i++) {
-      const regId = ids[i];
-      const reg = allRegs.find(r => r.id === regId);
-      if (!reg) continue;
-      setBulkProgress(p => ({ ...p, current: reg.name, done: i }));
-      try {
-        const thisRegControls = CONTROLS_LIBRARY.filter(c => c.regulations.includes(regId));
-        const otherControls = CONTROLS_LIBRARY.filter(c => !c.regulations.includes(regId) && c.regulations.some(rId => inScopeIds.has(rId)));
-        const prompt = `You are a regulatory compliance expert. Respond with ONLY a valid JSON object - no markdown, no backticks, no text outside JSON. No newlines inside string values.
-
-Regulation: ${reg.name} (${reg.reference}) | ${reg.region} | ${reg.domain} | Effective: ${reg.effectiveDate} | Deadline: ${reg.deadline||"N/A"}
-Summary: ${reg.summary}
-Marsh entities in scope: ${(reg.marshEntities||[]).join(", ")||"Unknown"}
-
-Controls ALREADY MAPPED to this regulation: ${thisRegControls.map(c=>c.title).join(", ")||"None"}
-Controls from other in-scope regulations: ${otherControls.map(c=>c.title).join(", ")||"None"}
-
-Return this exact JSON (string values max 25 words, reasons max 10 words):
-{"executiveSummary":"2 sentence summary","businessRisk":"High","riskRationale":"one sentence","keyObligations":["obligation 1","obligation 2","obligation 3"],"marshScope":[{"entity":"Marsh (Parent)","inScope":true,"reason":"short reason"},{"entity":"Marsh Risk","inScope":true,"reason":"short reason"},{"entity":"Guy Carpenter / Marsh Re","inScope":false,"reason":"short reason"},{"entity":"Mercer","inScope":false,"reason":"short reason"},{"entity":"Oliver Wyman","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Limited (UK)","inScope":false,"reason":"short reason"},{"entity":"Marsh Securities Ireland","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Securities LLC","inScope":false,"reason":"short reason"},{"entity":"Marsh MMA Asset Management LLC","inScope":false,"reason":"short reason"},{"entity":"Victor Insurance","inScope":false,"reason":"short reason"},{"entity":"McGriff Insurance Services","inScope":false,"reason":"short reason"}],"allControls":[{"title":"name","description":"what to do","priority":"Immediate","isNew":true}],"gapAnalysis":"one paragraph","deadlineRisk":"one sentence or empty string","recommendedActions":["action 1","action 2","action 3"]}
-
-Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allControls=ALL controls needed. marshScope must have all 12 entities. Output ONLY raw JSON.`;
-
-        const res = await fetch(PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 4000, messages: [{ role: "user", content: prompt }] }) });
-        const data = await res.json();
-        const raw = data.content?.[0]?.text || "";
-        const text = raw.replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/,"").trim();
-        let parsed;
-        try { parsed = JSON.parse(text); }
-        catch { const m = text.match(/\{[\s\S]*\}/); try { parsed = JSON.parse(m?.[0]); } catch { parsed = null; } }
-        if (parsed) onAnalysisComplete(regId, parsed);
-        else setBulkProgress(p => ({ ...p, errors: [...p.errors, reg.name] }));
-      } catch (e) {
-        setBulkProgress(p => ({ ...p, errors: [...p.errors, reg.name] }));
-      }
-      setBulkProgress(p => ({ ...p, done: i + 1 }));
-      // Small delay between requests to avoid rate limiting
-      if (i < ids.length - 1) await new Promise(r => setTimeout(r, 800));
+      setSelected(enriched);
+    } catch(err) {
+      var errText = err.message === "LIMIT_EXCEEDED" ? limitMsg() : ("Analysis failed: " + err.message);
+      var failed = Object.assign({}, reg, { loading: false, error: errText });
+      setRegulations(function(prev) { return prev.map(function(r) { return r.id === reg.id ? failed : r; }); });
+      setSelected(failed);
     }
-    setBulkProgress(p => ({ ...p, current: "", done: ids.length }));
-    setBulkRunning(false);
-  };
+    setAnalyzing(false);
+  }
 
-    const analyze = async () => {
-    setLoading(true); setError(""); setResult(null);
-    try {
-      let messages;
-      if (activeTab === "file" && uploadedFile && fileContent) {
-        const isPdf = uploadedFile.type === "application/pdf";
-        const regData = { name: uploadedFile.name.replace(/\.[^.]+$/, ""), region: "Unknown", domain: "Unknown", marshEntities: [], summary: "" };
-        const prompt = buildPrompt(regData, "See attached document");
-        if (isPdf) {
-          const base64 = fileContent.split(",")[1];
-          // Shorter prompt for PDF - the document content is in the file itself
-          const pdfPrompt = prompt.replace("See attached document", "the attached PDF document");
-          messages = [{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }, { type: "text", text: pdfPrompt }] }];
-        } else {
-          // For text files: truncate content to leave room for response
-          const truncated = fileContent.substring(0, 4000);
-          const docPrompt = prompt.replace("See attached document", `Document excerpt (first 4000 chars):\n${truncated}`);
-          messages = [{ role: "user", content: docPrompt }];
-        }
-      } else if (reg) {
-        const prompt = buildPrompt(reg);
-        messages = [{ role: "user", content: prompt }];
-      } else { setError("Please select a regulation or upload a file."); setLoading(false); return; }
+  function addRegulation() {
+    if (!inputText.trim()) return;
+    var reg = { id: Date.now(), title: inputTitle.trim() || ("Regulation " + (regulations.length + 1)), text: inputText.trim(), addedAt: new Date().toLocaleDateString(), savedAt: Date.now(), inScope: false };
+    setInputText(""); setInputTitle(""); setActiveTab("summary");
+    analyzeRegulation(reg);
+  }
 
-      const res = await fetch(PROXY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 8000, messages }) });
-      if (!res.ok) throw new Error(`API error ${res.status}`);
-      const data = await res.json();
-      const raw = data.content?.[0]?.text || "";
-      const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-      let parsed;
-      try { parsed = JSON.parse(text); }
-      catch {
-        try {
-          let jsonStr = text;
-          const start = jsonStr.indexOf("{");
-          if (start === -1) throw new Error("No JSON");
-          jsonStr = jsonStr.substring(start);
-          // Fix trailing commas
-          jsonStr = jsonStr.replace(/,\s*([}\]])/g, "$1");
-          // Fix unescaped newlines inside strings
-          jsonStr = jsonStr.replace(/([^\\])\n/g, "$1 ");
-          // If truncated, close open structures
-          const opens = (jsonStr.match(/\{/g)||[]).length - (jsonStr.match(/\}/g)||[]).length;
-          const openArr = (jsonStr.match(/\[/g)||[]).length - (jsonStr.match(/\]/g)||[]).length;
-          if (opens > 0 || openArr > 0) {
-            // Close any dangling string value
-            const lastChar = jsonStr.trimEnd().slice(-1);
-            if (lastChar !== '"' && lastChar !== ']' && lastChar !== '}') jsonStr += '"';
-            for (let i = 0; i < openArr; i++) jsonStr += "]";
-            for (let i = 0; i < opens; i++) jsonStr += "}";
-          }
-          parsed = JSON.parse(jsonStr);
-        } catch {
-          parsed = {
-            executiveSummary: "The document was analyzed but the response was too large to fully parse. The document may be too long — try uploading a shorter excerpt.",
-            businessRisk: "Medium", riskRationale: "Response was truncated.",
-            keyObligations: text.length > 100 ? [text.substring(0, 600) + "..."] : ["No content returned"],
-            allControls: [], gapAnalysis: "Re-run with a shorter document or paste key sections.", deadlineRisk: "", recommendedActions: ["Upload a shorter excerpt of the regulation (first 5 pages)"]
-          };
-        }
-      }
-      if (selected) onAnalysisComplete(selected, parsed);
-      else if (activeTab === "file" && uploadedFile) {
-        // Store file analysis keyed by a stable file key
-        const fileKey = "FILE:" + uploadedFile.name.replace(/[^a-zA-Z0-9]/g, "_");
-        onAnalysisComplete(fileKey, parsed);
-        setFileResult(parsed);
-      }
-      setResult(parsed);
-    } catch (e) { setError(e.message || "Analysis failed"); }
-    finally { setLoading(false); }
-  };
+  function loadSample(s) {
+    var reg = { id: Date.now(), title: s.title, text: s.text, addedAt: new Date().toLocaleDateString(), savedAt: Date.now(), inScope: false };
+    setActiveTab("summary");
+    analyzeRegulation(reg);
+  }
 
+  function handleAnalyseFromScan(reg) {
+    var text = (reg.title || "") + ". " + (reg.summary || "") + " Type: " + (reg.type || "") + ". Reference: " + (reg.reference || "N/A") + ". Status: " + (reg.status || "N/A") + ". Jurisdiction: " + (reg.jurisdiction || "N/A") + ".";
+    var r = { id: Date.now(), title: reg.title || "Scanned Regulation", text: text, addedAt: new Date().toLocaleDateString(), savedAt: Date.now(), inScope: false };
+    setShowScanner(false);
+    setActiveTab("summary");
+    analyzeRegulation(r);
+  }
 
-  // Shared regulation info + marsh scope panel
-  const RegInfoPanel = ({ regData, regKey, currentScope, onScopeChg, analysisResult }) => {
-    if (!regData) return null;
-    const marshScope = MARSH_ENTITIES.map(e => ({ entity: e, inScope: (regData.marshEntities || []).includes(e) }));
-    const days = daysUntil(regData.deadline);
-    return (
-      <div>
-        {/* Regulation details card */}
-        <div style={{ background: C.panel2, borderRadius: 10, padding: 16, marginBottom: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
-            <div>
-              <div style={{ fontWeight: 700, color: C.text, fontSize: 15 }}>{regData.name}</div>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>
-                {[regData.reference, regData.region, regData.domain].filter(Boolean).join(" · ")}
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
-              {regData.status && <Badge text={analysisResult ? "Analyzed" : regData.status} style={statusStyle(analysisResult ? "Analyzed" : regData.status)} />}
-              <Badge text={currentScope} style={scopeStyle(currentScope)} />
-            </div>
-          </div>
-          {regData.summary && <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.7, marginBottom: 10 }}>{regData.summary}</p>}
-          {regData.deadline && (
-            <div style={{ fontSize: 13, color: urgencyColor(days), marginBottom: 10 }}>
-              Deadline: {formatDeadline(regData.deadline)} ({days} days)
-            </div>
-          )}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 13, color: C.muted }}>Scope:</span>
-            <select value={currentScope} onChange={e => onScopeChg(regKey, e.target.value)}
-              style={{ background: C.panel, border: `1px solid ${C.border}`, color: C.text, borderRadius: 7, padding: "5px 10px", fontSize: 13, cursor: "pointer", outline: "none" }}>
-              <option>Pending</option><option>In Scope</option><option>Out of Scope</option>
-            </select>
-          </div>
-        </div>
-        {/* Marsh Entity Scope */}
-        <div style={{ background: C.panel2, borderRadius: 10, padding: 16, marginBottom: 14, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>◈ Marsh Entity Scope</div>
-          <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>Based on regulation's tagged entities. Run analysis for AI rationale.</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div>
-              <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.green, fontWeight: 700, marginBottom: 8 }}>
-                ● In Scope ({marshScope.filter(e => e.inScope).length})
-              </div>
-              {marshScope.filter(e => e.inScope).map(e => {
-                const ai = analysisResult?.marshScope?.find(x => x.entity === e.entity);
-                return (
-                  <div key={e.entity} style={{ background: C.greenBg, border: `1px solid ${C.greenBorder}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: "9px 12px", marginBottom: 6 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{e.entity}</div>
-                    {ai?.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{ai.reason}</div>}
-                  </div>
-                );
-              })}
-              {marshScope.filter(e => e.inScope).length === 0 && <div style={{ fontSize: 13, color: C.muted, fontStyle: "italic" }}>None tagged</div>}
-            </div>
-            <div>
-              <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, fontWeight: 700, marginBottom: 8 }}>
-                ○ Out of Scope ({marshScope.filter(e => !e.inScope).length})
-              </div>
-              {marshScope.filter(e => !e.inScope).map(e => {
-                const ai = analysisResult?.marshScope?.find(x => x.entity === e.entity);
-                return (
-                  <div key={e.entity} style={{ background: C.panel, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", marginBottom: 6, opacity: 0.65 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.muted }}>{e.entity}</div>
-                    {ai?.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{ai.reason}</div>}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, fontStyle: "italic" }}>Always validate with legal counsel.</div>
-        </div>
-      </div>
-    );
-  };
+  var btnP = { width: "100%", background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "inherit", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "bold" };
+  var btnS = { width: "100%", background: "transparent", border: "1px solid " + C.border, color: C.muted, padding: "7px 10px", borderRadius: 6, cursor: "pointer", fontSize: 10, fontFamily: "inherit", marginBottom: 5, textAlign: "left", display: "flex", alignItems: "center", gap: 6 };
+  var sLabel = { fontSize: 10, color: C.muted, letterSpacing: "0.18em", textTransform: "uppercase", marginBottom: 7, display: "block" };
+  var sHead = { fontSize: 10, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 14 };
+  var sumBox = { background: C.panel, border: "1px solid " + C.border, borderRadius: 10, padding: "16px 20px", fontSize: 13, lineHeight: 1.8, color: C.text };
+  var metaCard = { background: C.panel, border: "1px solid " + C.border, borderRadius: 10, padding: "13px 16px" };
 
-    const card = { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22, marginBottom: 16 };
-  const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "11px 14px", fontSize: 14, outline: "none" };
-  const marshScopeFromReg = reg ? MARSH_ENTITIES.map(e => ({ entity: e, inScope: (reg.marshEntities || []).includes(e) })) : [];
-  const canAnalyze = (activeTab === "regulation" && selected) || (activeTab === "file" && uploadedFile);
-
-  const TabBtn = ({ id, label, icon }) => (
-    <button onClick={() => setActiveTab(id)} style={{ padding: "8px 18px", borderRadius: 8, border: `1px solid ${activeTab === id ? C.indigoBorder : C.border}`, background: activeTab === id ? C.indigoBg : "transparent", color: activeTab === id ? C.indigo : C.muted, fontSize: 13, fontWeight: activeTab === id ? 600 : 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>{icon} {label}</button>
-  );
+  var a = selected && selected.analysis ? selected.analysis : null;
+  var totalFound = scanResults.reduce(function(t, r) { return t + r.regs.length; }, 0);
 
   return (
-    <div className="fadeIn">
-      <div style={{ marginBottom: 22 }}>
-        <h1 style={{ fontSize: 26, fontWeight: 800, color: C.text }}>Analyze Regulation</h1>
-        <p style={{ fontSize: 15, color: C.muted, marginTop: 6 }}>AI-powered compliance analysis · file upload · URL scanning</p>
-      </div>
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'IBM Plex Mono','Courier New',monospace", color: C.text }}>
+      <style>{"\n        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap');\n        *{box-sizing:border-box;margin:0;}\n        input:focus,textarea:focus{border-color:#00d4ff!important;outline:none;}\n        input[type=file]{font-size:12px}\n        @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}\n        @keyframes blink{50%{opacity:0}}\n        @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}\n        .fade-in{animation:fadeIn 0.3s ease forwards}\n        ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:3px}\n        .hov:hover{background:rgba(0,212,255,0.07)!important}\n        .btnp:hover{background:linear-gradient(135deg,rgba(0,212,255,0.28),rgba(124,58,237,0.28))!important}\n        .tab{cursor:pointer;padding:5px 10px;border-radius:5px;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;font-family:inherit;border:none;white-space:nowrap;}\n        .ton{background:rgba(0,212,255,0.15);color:#00d4ff;}\n        .toff{color:#64748b;background:transparent;}\n        .toff:hover{color:#94a3b8;}\n        .mobile-only{display:none!important}\n        .mobile-nav{display:none!important}\n        body.is-mobile .desktop-sidebar{display:none!important}\n        body.is-mobile .mobile-only{display:flex!important}\n        body.is-mobile .mobile-nav{display:flex!important}\n        body.is-mobile .app-grid{grid-template-columns:1fr!important}\n        body.is-mobile .main-panel{padding:16px 14px!important}\n        body.is-mobile .hdr{padding:10px 14px!important}\n        body.is-mobile .hdr-scan-label{display:none!important}\n        body.is-mobile .meta-3col{grid-template-columns:1fr 1fr!important}\n        body.is-mobile .risk-3col{grid-template-columns:1fr!important}\n        body.is-mobile .modal-inner{max-width:100%!important;max-height:92vh!important;border-radius:14px 14px 0 0!important;position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100%!important}\n        body.is-mobile .modal-bg{align-items:flex-end!important;padding:0!important}\n        body.is-mobile .tab-scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch;padding-bottom:4px}\n        body.is-mobile .tab-scroll::-webkit-scrollbar{display:none}\n      "}</style>
 
-      {/* Tab switcher */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <TabBtn id="regulation" label="Select Regulation" icon="≡" />
-        <TabBtn id="bulk" label={`Bulk Analyze${bulkSelected.size > 0 ? ` (${bulkSelected.size})` : ""}`} icon="⚡" />
-        <TabBtn id="file" label="Upload File" icon="↑" />
-        <TabBtn id="url" label="Manage URLs" icon="🔗" />
-      </div>
-
-      {/* Regulation tab */}
-      {activeTab === "regulation" && (
-        <div style={card}>
-          <label style={{ display: "block", fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Select Regulation</label>
-          <div style={{ position: "relative", marginBottom: 16 }}>
-            <input value={selected && !showDropdown ? (allRegs.find(r => r.id === selected)?.name || selected) : searchQ} onChange={e => { setSearchQ(e.target.value); setShowDropdown(true); if (!e.target.value) setSelected(""); }} onFocus={() => { setShowDropdown(true); if (selected) setSearchQ(""); }} onBlur={() => setTimeout(() => setShowDropdown(false), 200)} placeholder="Search by name, reference, or ID..." style={{ ...inp, width: "100%", paddingRight: 36 }} />
-            <span onClick={() => { setSelected(""); setSearchQ(""); setShowDropdown(true); }} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", cursor: "pointer", color: C.muted, fontSize: 16, userSelect: "none" }}>{selected ? "×" : "▾"}</span>
-            {showDropdown && (
-              <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, marginTop: 4, maxHeight: 300, overflowY: "auto", boxShadow: "0 12px 36px rgba(0,0,0,0.5)" }}>
-                {filteredRegs.length === 0 && <div style={{ padding: "14px 16px", fontSize: 13, color: C.muted }}>No regulations found</div>}
-                {filteredRegs.map(r => (
-                  <div key={r.id} onMouseDown={() => selectReg(r.id)} style={{ padding: "11px 16px", cursor: "pointer", borderBottom: `1px solid ${C.border}`, background: selected === r.id ? C.indigoBg : "transparent" }} onMouseEnter={e => e.currentTarget.style.background = selected === r.id ? C.indigoBg : C.panel2} onMouseLeave={e => e.currentTarget.style.background = selected === r.id ? C.indigoBg : "transparent"}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontFamily: "monospace", fontSize: 11, color: C.muted, flexShrink: 0 }}>{r.id}</span><span style={{ fontSize: 14, color: C.text, fontWeight: selected === r.id ? 600 : 400 }}>{r.name}</span>{analysisMap[r.id] && <span style={{ marginLeft: "auto", fontSize: 11, color: C.indigo, flexShrink: 0 }}>● Analyzed</span>}</div>
-                    <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.reference} · {r.region} · {r.domain}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          {reg && <RegInfoPanel regData={reg} regKey={selected} currentScope={scopeMap[selected]||"Pending"} onScopeChg={onScopeChange} analysisResult={result} />}
-          <button onClick={analyze} disabled={!canAnalyze || loading} style={{ display: "flex", alignItems: "center", gap: 8, background: C.accent, border: "none", color: "#fff", fontWeight: 700, padding: "11px 24px", borderRadius: 9, fontSize: 15, cursor: canAnalyze && !loading ? "pointer" : "not-allowed", opacity: !canAnalyze || loading ? 0.5 : 1 }}>
-            {loading ? <><span className="spin" style={{ display: "inline-block", width: 14, height: 14, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%" }} />Analyzing...</> : "⚡ Run Analysis"}
-          </button>
-          {error && <div style={{ marginTop: 12, background: C.redBg, border: `1px solid ${C.redBorder}`, color: C.red, borderRadius: 9, padding: 14, fontSize: 14 }}>{error}</div>}
-        </div>
-      )}
-
-      {/* File Upload tab */}
-      {activeTab === "file" && (() => {
-        const fileKey = uploadedFile ? "FILE:" + uploadedFile.name.replace(/[^a-zA-Z0-9]/g, "_") : null;
-        const existingAnalysis = fileKey ? analysisMap[fileKey] : null;
-        const fileScope = fileKey ? (scopeMap[fileKey] || "Pending") : "Pending";
-        return (
+      {/* Header */}
+      <div className="hdr" style={{ borderBottom: "1px solid " + C.border, padding: "14px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.panel, position: "sticky", top: 0, zIndex: 100 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 34, height: 34, background: "linear-gradient(135deg," + C.accent + "," + C.accent3 + ")", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17 }}>⚖</div>
           <div>
-            <div style={card}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 6 }}>Upload Regulation Document</div>
-              <div style={{ fontSize: 13, color: C.muted, marginBottom: 18 }}>Upload a PDF or text file containing a regulation. DELPHI will extract and analyze its compliance obligations.</div>
-              <label style={{ display: "block", cursor: "pointer" }}>
-                <div style={{ border: `2px dashed ${uploadedFile ? C.indigoBorder : C.border}`, borderRadius: 12, padding: "32px 24px", textAlign: "center", background: uploadedFile ? C.indigoBg : C.panel2, transition: "all 0.2s" }}>
-                  {uploadedFile ? (
-                    <div>
-                      <div style={{ fontSize: 28, marginBottom: 8 }}>📄</div>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: C.indigo }}>{uploadedFile.name}</div>
-                      <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{(uploadedFile.size / 1024).toFixed(1)} KB · {uploadedFile.type || "text"}</div>
-                      {existingAnalysis
-                        ? <div style={{ fontSize: 12, color: C.green, marginTop: 6 }}>✓ Previously analyzed</div>
-                        : <div style={{ fontSize: 12, color: C.green, marginTop: 6 }}>✓ Ready to analyze</div>}
-                    </div>
-                  ) : (
-                    <div>
-                      <div style={{ fontSize: 32, marginBottom: 10 }}>↑</div>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Drop a file or click to browse</div>
-                      <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>PDF, TXT, DOCX supported</div>
-                    </div>
-                  )}
-                </div>
-                <input type="file" accept=".pdf,.txt,.doc,.docx" onChange={handleFile} style={{ display: "none" }} />
-              </label>
-              {uploadedFile && (
-                <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
-                  <button onClick={() => { setUploadedFile(null); setFileContent(""); setResult(null); setFileResult(null); }} style={{ fontSize: 12, color: C.muted, background: "transparent", border: "none", cursor: "pointer" }}>× Remove</button>
-                </div>
-              )}
-              {uploadedFile && fileKey && (() => {
-                const fakeReg = { name: uploadedFile.name.replace(/\.[^.]+$/, ""), reference: "", region: "", domain: "", summary: "Uploaded document — run analysis to extract details.", marshEntities: [], deadline: null, status: existingAnalysis ? "Analyzed" : "Pending" };
-                return <RegInfoPanel regData={fakeReg} regKey={fileKey} currentScope={fileScope} onScopeChg={onScopeChange} analysisResult={existingAnalysis} />;
-              })()}
-              <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-                {existingAnalysis ? (
-                  <button onClick={() => { setResult(existingAnalysis); setViewingFileResult(uploadedFile?.name); }}
-                    style={{ display: "flex", alignItems: "center", gap: 8, background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, color: C.indigo, fontWeight: 700, padding: "11px 24px", borderRadius: 9, fontSize: 14, cursor: "pointer" }}>
-                    👁 View Analysis
-                  </button>
-                ) : null}
-                <button onClick={analyze} disabled={!uploadedFile || loading}
-                  style={{ display: "flex", alignItems: "center", gap: 8, background: C.accent, border: "none", color: "#fff", fontWeight: 700, padding: "11px 24px", borderRadius: 9, fontSize: 15, cursor: uploadedFile && !loading ? "pointer" : "not-allowed", opacity: !uploadedFile || loading ? 0.5 : 1 }}>
-                  {loading ? <><span className="spin" style={{ display: "inline-block", width: 14, height: 14, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%" }} />Analyzing...</> : existingAnalysis ? "↻ Re-analyze" : "⚡ Analyze Document"}
+            <div style={{ fontSize: 13, fontWeight: "bold", letterSpacing: "0.15em", color: C.accent, textTransform: "uppercase" }}>DELPHI</div>
+            <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase" }}>Document Extraction for Legal/Policy Harmonization & Implementation</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={scanAllSources} disabled={scanning || !sources.length}
+            style={{ background: C.accent3 + "22", border: "1px solid " + C.accent3 + "66", color: "#a78bfa", padding: "5px 14px", borderRadius: 20, fontSize: 11, letterSpacing: "0.08em", cursor: "pointer", fontFamily: "inherit", fontWeight: "bold", opacity: scanning || !sources.length ? 0.5 : 1 }}>
+            {scanning ? "↻ " : "⟳ "}<span className="hdr-scan-label">{scanning ? "Scanning..." : "Scan All Sources"}</span>
+          </button>
+          {totalFound > 0 && !scanning && (
+            <button onClick={function() { setShowScanner(true); }}
+              style={{ background: C.success + "22", border: "1px solid " + C.success + "44", color: C.success, padding: "5px 14px", borderRadius: 20, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: "bold" }}>
+              {"📋 " + totalFound + " Found"}
+            </button>
+          )}
+          <div style={{ background: C.accent + "22", border: "1px solid " + C.accent + "44", color: C.accent, padding: "4px 12px", borderRadius: 20, fontSize: 11 }}>⬡ AI-Powered</div>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="app-grid" style={{ display: "grid", gridTemplateColumns: "360px 1fr", minHeight: "calc(100vh - 65px)" }}>
+
+        {/* Sidebar */}
+        <div className="desktop-sidebar" style={{ borderRight: "1px solid " + C.border, background: C.panel, display: "flex", flexDirection: "column", overflowY: "auto" }}>
+          <div style={{ padding: "18px 18px 14px", borderBottom: "1px solid " + C.border }}>
+            <span style={sLabel}>Ingest Regulation</span>
+            <input type="text" placeholder="Regulation title (optional)..." value={inputTitle} onChange={function(e) { setInputTitle(e.target.value); }} style={{ ...iStyle, marginBottom: 8, display: "block" }} />
+            <UploadZone onFile={handleFileUpload} uploading={uploading} />
+            <div style={{ marginBottom: 8 }}>
+              <span style={{ ...sLabel, marginBottom: 5 }}>🔗 Import from URL</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input type="text" placeholder="Paste regulation URL..." value={urlInput}
+                  onChange={function(e) { setUrlInput(e.target.value); setUrlError(""); }}
+                  onKeyDown={function(e) { if (e.key === "Enter") fetchFromUrl(urlInput); }}
+                  style={{ ...iStyle, flex: 1, fontSize: 11 }} />
+                <button onClick={function() { fetchFromUrl(urlInput); }} disabled={!urlInput.trim() || fetchingUrl}
+                  style={{ ...btnP, width: "auto", padding: "0 14px", opacity: !urlInput.trim() || fetchingUrl ? 0.5 : 1 }}>
+                  {fetchingUrl ? "..." : "→"}
                 </button>
               </div>
-              {error && <div style={{ marginTop: 12, background: C.redBg, border: `1px solid ${C.redBorder}`, color: C.red, borderRadius: 9, padding: 14, fontSize: 14 }}>{error}</div>}
+              {urlError && <div style={{ fontSize: 10, color: C.critical, marginTop: 5, lineHeight: 1.5 }}>{urlError}</div>}
             </div>
-          </div>
-        );
-      })()}
-
-      {/* URL Management tab */}
-      {activeTab === "bulk" && (
-        <div>
-          {/* Bulk Analysis Header */}
-          <div style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>Bulk Regulation Analysis</div>
-              <div style={{ fontSize: 13, color: C.muted }}>Select multiple regulations and run AI analysis on all of them. Analysis runs sequentially to avoid rate limits.</div>
-            </div>
-            <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <select value={bulkFilter} onChange={e => setBulkFilter(e.target.value)} style={{ background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", outline: "none" }}>
-                <option value="All">All Regulations</option>
-                <option value="In Scope">In Scope Only</option>
-                <option value="Pending">Pending Scope</option>
-                <option value="Not Analyzed">Not Yet Analyzed</option>
-                <option value="Analyzed">Already Analyzed</option>
-              </select>
-              <button onClick={() => {
-                const filtered = allRegs.filter(r => {
-                  if (bulkFilter === "In Scope") return (scopeMap[r.id]||"Pending") === "In Scope";
-                  if (bulkFilter === "Pending") return (scopeMap[r.id]||"Pending") === "Pending";
-                  if (bulkFilter === "Not Analyzed") return !analysisMap[r.id];
-                  if (bulkFilter === "Analyzed") return !!analysisMap[r.id];
-                  return true;
-                });
-                setBulkSelected(new Set(filtered.map(r => r.id)));
-              }} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, fontSize: 13, cursor: "pointer" }}>Select All</button>
-              <button onClick={() => setBulkSelected(new Set())} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.panel2, color: C.muted, fontSize: 13, cursor: "pointer" }}>Clear</button>
-              <button onClick={runBulkAnalysis} disabled={bulkSelected.size === 0 || bulkRunning}
-                style={{ padding: "9px 20px", background: bulkSelected.size > 0 && !bulkRunning ? C.accent : C.panel2, border: "none", color: bulkSelected.size > 0 && !bulkRunning ? "#fff" : C.muted, borderRadius: 9, fontSize: 14, fontWeight: 700, cursor: bulkSelected.size > 0 && !bulkRunning ? "pointer" : "not-allowed", whiteSpace: "nowrap" }}>
-                {bulkRunning ? `Analyzing ${bulkProgress.done}/${bulkProgress.total}...` : `⚡ Analyze ${bulkSelected.size > 0 ? `(${bulkSelected.size})` : ""}`}
-              </button>
-            </div>
+            <textarea placeholder="...or paste regulation text here" value={inputText} onChange={function(e) { setInputText(e.target.value); }}
+              rows={4} style={{ ...iStyle, resize: "none", lineHeight: 1.6, marginBottom: 8, display: "block" }} />
+            <button className="btnp" style={{ ...btnP, opacity: !inputText.trim() || analyzing || uploading ? 0.5 : 1 }}
+              onClick={addRegulation} disabled={!inputText.trim() || analyzing || uploading}>
+              {analyzing ? "↻ Analyzing..." : "→ Analyze Regulation"}
+            </button>
           </div>
 
-          {/* Progress bar */}
-          {(bulkRunning || bulkProgress.done > 0) && (
-            <div style={{ ...card, marginBottom: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
-                  {bulkRunning ? `Analyzing: ${bulkProgress.current}` : bulkProgress.errors.length === 0 ? `✓ Complete — ${bulkProgress.done} regulations analyzed` : `Complete — ${bulkProgress.done - bulkProgress.errors.length}/${bulkProgress.done} succeeded`}
-                </div>
-                <div style={{ fontSize: 13, color: C.muted }}>{bulkProgress.done}/{bulkProgress.total}</div>
-              </div>
-              <div style={{ height: 8, background: C.panel2, borderRadius: 4, overflow: "hidden" }}>
-                <div style={{ height: "100%", background: bulkProgress.errors.length > 0 ? C.amber : C.green, borderRadius: 4, width: `${bulkProgress.total > 0 ? (bulkProgress.done / bulkProgress.total) * 100 : 0}%`, transition: "width 0.4s ease" }} />
-              </div>
-              {bulkProgress.errors.length > 0 && (
-                <div style={{ fontSize: 12, color: C.red, marginTop: 8 }}>Failed: {bulkProgress.errors.join(", ")}</div>
-              )}
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ ...sLabel, marginBottom: 0 }}>Monitored Sources</span>
+              <button onClick={function() { setShowSources(true); }} style={{ fontSize: 10, color: C.accent, background: "transparent", border: "1px solid " + C.accent + "44", borderRadius: 4, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>✎ Manage</button>
             </div>
-          )}
-
-          {/* Regulation checklist */}
-          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-            {allRegs.filter(r => {
-              if (bulkFilter === "In Scope") return (scopeMap[r.id]||"Pending") === "In Scope";
-              if (bulkFilter === "Pending") return (scopeMap[r.id]||"Pending") === "Pending";
-              if (bulkFilter === "Not Analyzed") return !analysisMap[r.id];
-              if (bulkFilter === "Analyzed") return !!analysisMap[r.id];
-              return true;
-            }).map((r, i, arr) => {
-              const isChecked = bulkSelected.has(r.id);
-              const isAnalyzed = !!analysisMap[r.id];
-              const cs = scopeMap[r.id] || "Pending";
+            {sources.map(function(src) {
               return (
-                <div key={r.id} onClick={() => {
-                  if (bulkRunning) return;
-                  setBulkSelected(prev => { const n = new Set(prev); isChecked ? n.delete(r.id) : n.add(r.id); return n; });
-                }} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 18px", borderBottom: i < arr.length - 1 ? `1px solid ${C.border}` : "none", cursor: bulkRunning ? "default" : "pointer", background: isChecked ? "rgba(129,140,248,0.06)" : "transparent", transition: "background 0.1s" }}>
-                  <div style={{ width: 18, height: 18, borderRadius: 5, border: `2px solid ${isChecked ? C.accent : C.border}`, background: isChecked ? C.accent : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {isChecked && <span style={{ color: "#fff", fontSize: 11, lineHeight: 1 }}>✓</span>}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
-                    <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.reference} · {r.region} · {r.domain}</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                    <Badge text={cs} style={scopeStyle(cs)} />
-                    {isAnalyzed
-                      ? <Badge text="Analyzed" style={statusStyle("Analyzed")} />
-                      : <Badge text="Not Analyzed" style={{ bg: "rgba(90,104,128,0.1)", border: "rgba(90,104,128,0.3)", color: C.muted }} />
-                    }
-                    {bulkRunning && bulkProgress.current === r.name && (
-                      <span className="spin" style={{ display: "inline-block", width: 14, height: 14, border: `2px solid ${C.accent}`, borderTopColor: "transparent", borderRadius: "50%", marginLeft: 4 }} />
-                    )}
-                  </div>
-                </div>
+                <button key={src.id} className="hov" title={src.description} style={btnS}
+                  onClick={function() { setUrlInput(src.url); fetchFromUrl(src.url); }}>
+                  <span>{src.icon}</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{src.label}</span>
+                </button>
+              );
+            })}
+            <button onClick={function() { setShowSources(true); }} style={{ ...btnS, color: C.accent, borderStyle: "dashed", marginBottom: 0 }}>
+              <span>+</span><span>Add source...</span>
+            </button>
+          </div>
+
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid " + C.border }}>
+            <span style={sLabel}>Sample Regulations</span>
+            {SAMPLE_REGS.map(function(s, i) {
+              return (
+                <button key={i} className="hov" style={btnS} onClick={function() { loadSample(s); }}>
+                  <span>+</span><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title.split("—")[0].trim()}</span>
+                </button>
               );
             })}
           </div>
-        </div>
-      )}
 
-            {activeTab === "url" && (
-        <div>
-          <div style={card}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Add Regulatory URL</div>
-            <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Add regulatory websites or specific regulation URLs. DELPHI will deep-crawl the page and linked regulation documents to identify and ingest regulations.</div>
-            <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-              <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Title (e.g. SEC Regulatory Guidance)" style={{ ...inp, width: 280, flexShrink: 0 }} />
-              <input value={newUrl} onChange={e => setNewUrl(e.target.value)} onKeyDown={e => e.key === "Enter" && addUrl()} placeholder="https://..." style={{ ...inp, flex: 1 }} />
-              <button onClick={addUrl} style={{ padding: "11px 20px", background: C.accent, border: "none", color: "#fff", borderRadius: 9, fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>+ Add</button>
-            </div>
+          <div style={{ flex: 1 }}>
+            {regulations.length === 0
+              ? <div style={{ padding: "20px 18px", color: C.muted, fontSize: 11, textAlign: "center", lineHeight: 1.7 }}>No regulations yet. Upload, paste, or try a sample.</div>
+              : regulations.map(function(reg) {
+                  return (
+                    <div key={reg.id} className="hov"
+                      style={{ padding: "12px 18px", borderBottom: "1px solid " + C.border, cursor: "pointer", borderLeft: "3px solid " + (reg.inScope ? C.success : selected && selected.id === reg.id ? C.accent : "transparent"), background: selected && selected.id === reg.id ? C.accent + "0d" : "transparent" }}
+                      onClick={function() { setSelected(reg); setActiveTab("summary"); setMobileView("detail"); setShowMobileSidebar(false); }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 6, marginBottom: 3 }}>
+                        <div style={{ fontSize: 11, fontWeight: "bold", color: C.text, lineHeight: 1.3 }}>{reg.title}</div>
+                        <button
+                          onClick={function(e) {
+                            e.stopPropagation();
+                            setRegulations(function(prev) {
+                              var updated = prev.map(function(r) { return r.id === reg.id ? Object.assign({}, r, { inScope: !r.inScope }) : r; });
+                              saveRegs(updated);
+                              return updated;
+                            });
+                            if (selected && selected.id === reg.id) setSelected(function(prev) { return Object.assign({}, prev, { inScope: !prev.inScope }); });
+                          }}
+                          style={{ background: reg.inScope ? C.success + "22" : "transparent", border: "1px solid " + (reg.inScope ? C.success + "66" : C.border), color: reg.inScope ? C.success : C.muted, borderRadius: 4, padding: "1px 6px", cursor: "pointer", fontSize: 9, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
+                          {reg.inScope ? "✓ In Scope" : "Set Scope"}
+                        </button>
+                      </div>
+                      <div style={{ fontSize: 9, color: C.muted, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {reg.loading
+                          ? <span style={{ color: C.accent }}>↻ Analyzing...</span>
+                          : reg.analysis
+                            ? <span style={{ color: riskColor(reg.analysis.riskLevel) }}>{"● " + reg.analysis.riskLevel + " Risk · " + (reg.analysis.controls || []).length + " Controls"}</span>
+                            : <span style={{ color: C.warning }}>⚠ Failed</span>}
+                        {reg.savedAt && !reg.loading && reg.analysis && <span style={{ color: reg.inScope ? C.success : C.muted, marginLeft: "auto" }}>{getExpiryLabel(reg)}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
           </div>
-          {urls.length === 0 ? (
-            <div style={{ textAlign: "center", color: C.muted, padding: "40px 0", fontSize: 14 }}>No URLs added yet. Add a regulatory URL above to get started.</div>
-          ) : (
-            urls.map(u => {
-              const res = urlResults[u.id];
-              return (
-                <div key={u.id} style={{ ...card, marginBottom: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      {editingUrl === u.id ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                          <input value={editTitleVal} onChange={e => setEditTitleVal(e.target.value)} placeholder="Title" style={{ ...inp, fontSize: 13 }} />
-                          <input value={editVal} onChange={e => setEditVal(e.target.value)} placeholder="URL" style={{ ...inp, fontSize: 13 }} />
-                          <div style={{ display: "flex", gap: 8 }}>
-                            <button onClick={() => saveEdit(u.id)} style={{ padding: "8px 14px", background: C.green, border: "none", color: "#fff", borderRadius: 7, fontSize: 13, cursor: "pointer" }}>Save</button>
-                            <button onClick={() => setEditingUrl(null)} style={{ padding: "8px 14px", background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 7, fontSize: 13, cursor: "pointer" }}>Cancel</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{u.title || u.label || u.url}</div>
-                          <div style={{ fontSize: 12, color: C.indigo, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 3 }}>{u.url}</div>
-                          <div style={{ display: "flex", gap: 12, marginTop: 4, alignItems: "center", flexWrap: "wrap" }}>
-                            <span style={{ fontSize: 11, color: C.muted }}>Added {new Date(u.added).toLocaleDateString()}</span>
-                            {u.lastScanned && <span style={{ fontSize: 11, color: C.muted }}>· Scanned {new Date(u.lastScanned).toLocaleDateString()}</span>}
-                            {u.scanResult?.regulations?.length > 0 && <span style={{ fontSize: 12, color: C.green, fontWeight: 600 }}>· {u.scanResult.regulations.length} regulations found</span>}
-                            {u.scanResult?.regulations?.filter(r => ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase())).length > 0 && (
-                              <span style={{ fontSize: 11, color: C.indigo }}>· {u.scanResult.regulations.filter(r => ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase())).length} ingested</span>
-                            )}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                      <button onClick={() => crawlUrl(u)} disabled={crawling === u.id} style={{ padding: "7px 14px", background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, color: C.indigo, borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: crawling === u.id ? "not-allowed" : "pointer", opacity: crawling === u.id ? 0.6 : 1 }}>{crawling === u.id ? "Scanning..." : "🔍 Scan"}</button>
-                      <button onClick={() => startEdit(u)} style={{ padding: "7px 12px", background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 7, fontSize: 13, cursor: "pointer" }}>✎ Edit</button>
-                      <button onClick={() => deleteUrl(u.id)} style={{ padding: "7px 12px", background: "transparent", border: `1px solid ${C.border}`, color: C.red, borderRadius: 7, fontSize: 13, cursor: "pointer" }}>✕</button>
-                    </div>
-                  </div>
-                  {res && (
-                    <div style={{ background: C.panel2, borderRadius: 9, padding: 14, marginTop: 8 }}>
-                      {(res.type === "loading" || res.crawling) ? (
-                        <div style={{ color: C.muted, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
-                          <span className="spin" style={{ display: "inline-block", width: 12, height: 12, border: `2px solid ${C.accent}`, borderTopColor: "transparent", borderRadius: "50%" }}/>
-                          {res.summary || "Scanning..."}
-                        </div>
-                      ) : res.type === "error" ? (
-                        <div style={{ color: C.red, fontSize: 13 }}>Scan error: {res.summary}</div>
-                      ) : (
-                        <>
-                          {/* Summary header with collapse toggle */}
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: collapsedUrls[u.id] ? 0 : 10, cursor: "pointer" }} onClick={() => toggleCollapse(u.id)}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <span style={{ fontSize: 14, color: C.muted }}>{collapsedUrls[u.id] ? "▶" : "▼"}</span>
-                              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-                                {res.type === "regulation" ? "📋 Regulation Document" : "🌐 Regulatory Site"} — {res.regulations?.length || 0} regulation(s) found
-                              </div>
-                            </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              {res.crawledAt && <div style={{ fontSize: 11, color: C.muted }}>Scanned {new Date(res.crawledAt).toLocaleString()}</div>}
-                              {/* Ingest all button */}
-                              {res.regulations?.length > 0 && (
-                                <button onClick={(e) => {
-                                  e.stopPropagation();
-                                  res.regulations.forEach(r => onIngest && onIngest(r, u.url, u.title || u.url));
-                                }} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.greenBorder}`, background: C.greenBg, color: C.green, cursor: "pointer", whiteSpace: "nowrap" }}>
-                                  ↓ Ingest All
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                          {!collapsedUrls[u.id] && (
-                            <>
-                              {res.regulationLinks?.length > 0 && <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>Deep crawled {res.regulationLinks.length} linked pages.</div>}
-                              {res.siteDescription && <div style={{ fontSize: 13, color: C.muted, marginBottom: 10, lineHeight: 1.5 }}>{res.siteDescription}</div>}
-                              {res.regulations?.map((r, i) => {
-                                const alreadyIngested = ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase());
-                                const alreadyInMaster = allRegs.some(mr => mr.name.toLowerCase() === r.name.toLowerCase() || (r.reference && mr.reference?.toLowerCase() === r.reference.toLowerCase()));
-                                const regKey = "URL:" + (r.reference || r.name).replace(/[^a-zA-Z0-9]/g, "_").substring(0, 40);
-                                const regAnalysis = analysisMap[regKey];
-                                const regScope = scopeMap[regKey] || "Pending";
-                                return (
-                                  <div key={i} style={{ background: C.panel, border: `1px solid ${alreadyIngested ? C.greenBorder : C.border}`, borderLeft: `3px solid ${alreadyIngested ? C.green : regAnalysis ? C.indigo : C.border}`, borderRadius: 9, padding: "12px 14px", marginBottom: 8 }}>
-                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 8 }}>
-                                      <div style={{ flex: 1, minWidth: 0 }}>
-                                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                                          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{r.name}</div>
-                                          {regAnalysis && <Badge text="Analyzed" style={statusStyle("Analyzed")} />}
-                                        </div>
-                                        <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference}{r.jurisdiction ? ` · ${r.jurisdiction}` : ""}{r.domain ? ` · ${r.domain}` : ""}</div>
-                                      </div>
-                                      <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center" }}>
-                                        {/* Scope selector */}
-                                        <select value={regScope} onChange={e => onScopeChange(regKey, e.target.value)}
-                                          style={{ background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 7, padding: "4px 8px", fontSize: 12, cursor: "pointer", outline: "none" }}>
-                                          <option>Pending</option><option>In Scope</option><option>Out of Scope</option>
-                                        </select>
-                                        <Badge text={regScope} style={scopeStyle(regScope)} />
-                                        {alreadyIngested ? (
-                                          <span style={{ fontSize: 11, color: C.green, fontWeight: 600, padding: "4px 8px", borderRadius: 6, background: C.greenBg, border: `1px solid ${C.greenBorder}` }}>✓ Ingested</span>
-                                        ) : alreadyInMaster ? (
-                                          <span style={{ fontSize: 11, color: C.muted, padding: "4px 8px", borderRadius: 6, background: C.panel2, border: `1px solid ${C.border}` }}>In Inventory</span>
-                                        ) : (
-                                          <button onClick={() => onIngest && onIngest(r, u.url, u.title || u.url)} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.greenBorder}`, background: C.greenBg, color: C.green, cursor: "pointer", whiteSpace: "nowrap" }}>↓ Ingest</button>
-                                        )}
-                                        {regAnalysis ? (
-                                          <button onClick={() => {
-                                            // Navigate to analyze tab with this result shown
-                                            setActiveTab("regulation");
-                                            setResult(regAnalysis);
-                                            setSelected("");
-                                            setViewingFileResult(r.name);
-                                          }} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, cursor: "pointer", whiteSpace: "nowrap" }}>👁 View Analysis</button>
-                                        ) : (
-                                          <button onClick={() => {
-                                            const enriched = { ...r, id: regKey, marshEntities: [] };
-                                            analyzeScannedReg(enriched, regKey);
-                                          }} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, cursor: "pointer", whiteSpace: "nowrap" }}>⚡ Analyze</button>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6 }}>{r.summary}</div>
-                                    {r.deadline && <div style={{ fontSize: 12, color: C.amber, marginTop: 6 }}>⚠ Deadline: {r.deadline}</div>}
-                                    {r.sourceUrl && <div style={{ fontSize: 11, color: C.indigo, marginTop: 4 }}><a href={r.sourceUrl} target="_blank" rel="noreferrer" style={{ color: C.indigo }}>↗ Source document</a></div>}
-                                  </div>
-                                );
-                              })}
-                            </>
-                          )}
-                        </>
-                      )}
+        </div>
+
+        {/* Main panel */}
+        <div className="main-panel" style={{ padding: "32px 40px", overflowY: "auto" }}>
+          {!selected ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "60vh", color: C.muted, textAlign: "center", gap: 16 }}>
+              <div style={{ fontSize: 52, opacity: 0.2 }}>⚖</div>
+              <div style={{ fontSize: 16, fontWeight: "bold", letterSpacing: "0.12em" }}>NO REGULATION SELECTED</div>
+              <div style={{ fontSize: 12, lineHeight: 1.8, maxWidth: 340 }}>Upload a file, paste text, import from a URL, or load a sample to generate an AI-powered compliance analysis.</div>
+              {IS_MOBILE && <button onClick={function() { setShowMobileSidebar(true); }}
+                style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "12px 28px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: "bold", letterSpacing: "0.1em", marginTop: 8 }}>
+                + Analyze a Regulation
+              </button>}
+            </div>
+          ) : selected.loading ? (
+            <div>
+              <div style={{ fontSize: 18, fontWeight: "bold", marginBottom: 24, color: C.text }}>{selected.title}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, color: C.muted, fontSize: 12 }}>
+                {[0,1,2].map(function(i) { return <span key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: C.accent, display: "inline-block", animation: "blink 1s " + (i * 0.3) + "s step-start infinite" }} />; })}
+                <span style={{ marginLeft: 6 }}>Running regulatory analysis...</span>
+              </div>
+            </div>
+          ) : selected.error ? (
+            <div style={{ color: C.critical, padding: "24px 0", fontSize: 13, lineHeight: 1.7 }}>{"⚠ " + selected.error}</div>
+          ) : a ? (
+            <div className="fade-in">
+              {/* Mobile back button */}
+              {IS_MOBILE && <button onClick={function() { setMobileView("home"); setSelected(null); }}
+                style={{ display: "flex", background: "transparent", border: "none", color: C.accent, cursor: "pointer", fontSize: 12, fontFamily: "inherit", marginBottom: 16, padding: 0, alignItems: "center", gap: 6 }}>
+                ← Back to list
+              </button>}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, gap: 16 }}>
+                <div style={{ flex: 1 }}>
+                  {a.instrumentType && (
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: C.accent3 + "22", border: "1px solid " + C.accent3 + "44", color: "#a78bfa", padding: "3px 10px", borderRadius: 4, fontSize: 10, fontWeight: "bold", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>
+                      {a.instrumentType === "Directive" ? "📘" : "📗"} {a.instrumentType}
                     </div>
                   )}
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
-
-      {/* Analysis Results */}
-      {result && (
-        <div className="fadeIn">
-          {viewingFileResult && (
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 16px", background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, borderRadius: 10 }}>
-              <span style={{ fontSize: 13, color: C.indigo, fontWeight: 600 }}>Analysis: {viewingFileResult}</span>
-              <button onClick={() => { setResult(null); setViewingFileResult(null); }} style={{ marginLeft: "auto", fontSize: 12, color: C.muted, background: "transparent", border: "none", cursor: "pointer" }}>✕ Close</button>
-            </div>
-          )}
-          <div style={{ ...card, borderLeft: `3px solid ${riskColor(result.businessRisk)}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <div style={{ fontWeight: 700, color: C.text, fontSize: 16 }}>Executive Summary</div>
-              <div style={{ fontSize: 15, fontWeight: 800, color: riskColor(result.businessRisk), background: `${riskColor(result.businessRisk)}18`, border: `1px solid ${riskColor(result.businessRisk)}40`, borderRadius: 8, padding: "4px 14px" }}>{result.businessRisk} Risk</div>
-            </div>
-            <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.75 }}>{result.executiveSummary}</p>
-            {result.riskRationale && <p style={{ fontSize: 13, color: C.muted, marginTop: 10, fontStyle: "italic", borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>{result.riskRationale}</p>}
-          </div>
-          <div style={card}>
-            <div style={{ fontWeight: 700, color: C.text, fontSize: 15, marginBottom: 12 }}>Key Obligations</div>
-            {result.keyObligations?.map((o, i) => <div key={i} style={{ display: "flex", gap: 10, marginBottom: 8, fontSize: 14, color: C.muted, alignItems: "flex-start" }}><span style={{ color: C.accent, flexShrink: 0, marginTop: 2 }}>▸</span>{o}</div>)}
-          </div>
-          <div style={card}>
-            <div style={{ fontWeight: 700, color: C.text, fontSize: 15, marginBottom: 10 }}>Gap Analysis</div>
-            <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.75 }}>{result.gapAnalysis}</p>
-          </div>
-          {(result.allControls || result.newControls)?.length > 0 && (
-            <div style={{ ...card, border: `1px solid ${C.border}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-                <div style={{ fontWeight: 700, color: C.text, fontSize: 15 }}>Controls ({(result.allControls || result.newControls).length})</div>
-                <span style={{ fontSize: 12, color: C.indigo, background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, borderRadius: 6, padding: "3px 10px" }}>{(result.allControls || result.newControls).filter(c => c.isNew !== false).length} new</span>
-                <span style={{ fontSize: 12, color: C.muted, background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 10px" }}>{(result.allControls || result.newControls).filter(c => c.isNew === false).length} existing</span>
-              </div>
-              {(result.allControls || result.newControls).map((c, i) => {
-                const isNew = c.isNew !== false;
-                const pc = { Immediate: C.red, "Short-term": C.amber, Ongoing: C.blue }[c.priority] || C.blue;
-                return (
-                  <div key={i} style={{ background: isNew ? C.indigoBg : "transparent", border: `1px solid ${isNew ? C.indigoBorder : C.border}`, borderLeft: `3px solid ${isNew ? C.indigo : C.border}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6, alignItems: "flex-start" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                        {isNew && <span style={{ fontSize: 10, background: C.indigo, color: "#fff", borderRadius: 4, padding: "2px 6px", flexShrink: 0, fontWeight: 700 }}>NEW</span>}
-                        <span style={{ fontWeight: 600, color: isNew ? C.accentHover : C.text, fontSize: 14 }}>{c.title}</span>
-                      </div>
-                      <Badge text={c.priority} style={{ bg: `${pc}22`, border: `${pc}44`, color: pc }} />
-                    </div>
-                    <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.65 }}>{c.description}</p>
+                  <div style={{ fontSize: 18, fontWeight: "bold", marginBottom: 4, lineHeight: 1.3 }}>{a.fullName || selected.title}</div>
+                  <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                    {a.referenceNumber && <span style={{ fontSize: 11, color: C.accent, fontWeight: "bold" }}>{a.referenceNumber}</span>}
+                    <span style={{ fontSize: 11, color: C.muted }}>{"Added " + selected.addedAt}</span>
                   </div>
-                );
-              })}
-            </div>
-          )}
-          {result.recommendedActions?.length > 0 && (
-            <div style={card}>
-              <div style={{ fontWeight: 700, color: C.text, fontSize: 15, marginBottom: 12 }}>Recommended Actions</div>
-              {result.recommendedActions.map((a, i) => <div key={i} style={{ display: "flex", gap: 12, marginBottom: 8, fontSize: 14, color: C.muted, alignItems: "flex-start" }}><span style={{ fontFamily: "monospace", fontSize: 12, background: C.panel2, borderRadius: 5, padding: "2px 8px", flexShrink: 0, color: C.accent, fontWeight: 600 }}>{i + 1}</span>{a}</div>)}
-            </div>
-          )}
-          {result.deadlineRisk && <div style={{ ...card, background: C.amberBg, border: `1px solid ${C.amberBorder}` }}><div style={{ display: "flex", gap: 10, fontSize: 14, color: C.amber, alignItems: "flex-start" }}><span style={{ flexShrink: 0 }}>⚠</span><span>{result.deadlineRisk}</span></div></div>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Controls({ allRegs, scopeMap, isAdmin, onDeleteControl, deletedControlIds }) {
-  const [cat, setCat] = useState("All"); const [search, setSearch] = useState(""); const [showAll, setShowAll] = useState(false); const [delCtrl, setDelCtrl] = useState(null);
-  const confirmDelCtrl = (id) => { if (delCtrl === id) { onDeleteControl(id); setDelCtrl(null); } else { setDelCtrl(id); setTimeout(() => setDelCtrl(null), 3000); } };
-  const inScopeIds = useMemo(() => new Set(Object.entries(scopeMap).filter(([, v]) => v === "In Scope").map(([k]) => k)), [scopeMap]);
-  const categories = useMemo(() => ["All", ...new Set(CONTROLS_LIBRARY.map(c => c.category))], []);
-
-  // Deduplicate controls - show each control once even if mapped to multiple in-scope regs
-  const controls = useMemo(() => {
-    let l = CONTROLS_LIBRARY.filter(c => !(deletedControlIds || []).includes(c.controlId));
-    if (!showAll) l = l.filter(c => c.regulations.some(rId => inScopeIds.has(rId)));
-    if (cat !== "All") l = l.filter(c => c.category === cat);
-    if (search) { const q = search.toLowerCase(); l = l.filter(c => c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)); }
-    // Deduplicate by controlId
-    const seen = new Set();
-    return l.filter(c => { if (seen.has(c.controlId)) return false; seen.add(c.controlId); return true; });
-  }, [inScopeIds, cat, search, showAll, deletedControlIds]);
-
-  const card = { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22, marginBottom: 14 };
-  const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "10px 14px", fontSize: 14, outline: "none" };
-
-  return (
-    <div className="fadeIn">
-      <div style={{ marginBottom: 18 }}>
-        <h1 style={{ fontSize: 26, fontWeight: 800, color: C.text }}>Controls Library</h1>
-        <p style={{ fontSize: 15, color: C.muted, marginTop: 6 }}>{controls.length} controls {showAll ? "(all)" : "(in-scope)"} · no duplicates</p>
-      </div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search controls..." style={{ ...inp, flex: 1, minWidth: 180 }} />
-        <select value={cat} onChange={e => setCat(e.target.value)} style={{ ...inp, cursor: "pointer" }}>{categories.map(c => <option key={c}>{c}</option>)}</select>
-        <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, color: C.muted, cursor: "pointer", padding: "10px 14px", border: `1px solid ${C.border}`, borderRadius: 9, background: C.panel2, userSelect: "none" }}>
-          <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} style={{ accentColor: C.accent }} />Show all controls
-        </label>
-      </div>
-      {inScopeIds.size === 0 && !showAll && (
-        <div style={{ background: C.amberBg, border: `1px solid ${C.amberBorder}`, borderRadius: 12, padding: 20, textAlign: "center", marginBottom: 18 }}>
-          <div style={{ color: C.amber, fontSize: 14, fontWeight: 600 }}>No regulations are marked In Scope yet</div>
-          <div style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Set regulations to In Scope in the Inventory tab</div>
-        </div>
-      )}
-      {controls.map(ctrl => {
-        const pc = { Immediate: C.red, "Short-term": C.amber, Ongoing: C.blue }[ctrl.priority] || C.blue;
-        const inScopeRegs = ctrl.regulations.filter(rId => inScopeIds.has(rId));
-        return (
-          <div key={ctrl.controlId} style={card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontFamily: "monospace", fontSize: 12, color: C.muted }}>{ctrl.controlId}</span>
-                  <Badge text={ctrl.priority} style={{ bg: `${pc}22`, border: `${pc}44`, color: pc }} />
-                  {inScopeRegs.length > 0 && <Badge text={`${inScopeRegs.length} in-scope reg${inScopeRegs.length > 1 ? "s" : ""}`} style={{ bg: C.greenBg, border: C.greenBorder, color: C.green }} />}
                 </div>
-                <div style={{ fontWeight: 700, color: C.text, fontSize: 15 }}>{ctrl.title}</div>
+                <div style={{ background: riskColor(a.riskLevel) + "22", border: "1px solid " + riskColor(a.riskLevel) + "55", color: riskColor(a.riskLevel), padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: "bold", letterSpacing: "0.1em", whiteSpace: "nowrap", flexShrink: 0 }}>
+                  {"● " + (a.riskLevel || "").toUpperCase() + " RISK"}
+                </div>
               </div>
-              <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexShrink: 0 }}>
-                <Badge text={ctrl.category} />
-                {isAdmin && <button onClick={() => confirmDelCtrl(ctrl.controlId)} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 7, border: `1px solid ${delCtrl === ctrl.controlId ? C.red : C.border}`, background: delCtrl === ctrl.controlId ? C.redBg : "transparent", color: delCtrl === ctrl.controlId ? C.red : C.muted, cursor: "pointer", flexShrink: 0 }}>{delCtrl === ctrl.controlId ? "Confirm" : "×"}</button>}
+
+              <div className="meta-3col" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 24 }}>
+                {[["Jurisdiction", a.jurisdiction, null], ["Effective Date", a.effectiveDate, null], ["Compliance Deadline", a.deadline, C.warning]].map(function(item) {
+                  return (
+                    <div key={item[0]} style={metaCard}>
+                      <div style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>{item[0]}</div>
+                      <div style={{ fontSize: 13, fontWeight: "bold", color: item[2] || C.text }}>{item[1] || "—"}</div>
+                    </div>
+                  );
+                })}
               </div>
+
+
+              {/* In Scope / Expiry Banner */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: selected.inScope ? C.success + "11" : C.panel, border: "1px solid " + (selected.inScope ? C.success + "44" : C.border) }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 10, color: selected.inScope ? C.success : C.muted, fontWeight: "bold", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2 }}>
+                    {selected.inScope ? "✓ In Scope — Retained for 20 days" : "Not marked in scope — Retained for 10 days"}
+                  </div>
+                  {selected.savedAt && <div style={{ fontSize: 9, color: C.muted }}>{getExpiryLabel(selected)}</div>}
+                </div>
+                <button
+                  onClick={function() {
+                    var updated = !selected.inScope;
+                    setRegulations(function(prev) {
+                      var next = prev.map(function(r) { return r.id === selected.id ? Object.assign({}, r, { inScope: updated }) : r; });
+                      saveRegs(next);
+                      return next;
+                    });
+                    setSelected(Object.assign({}, selected, { inScope: updated }));
+                  }}
+                  style={{ background: selected.inScope ? C.success + "22" : C.accent + "22", border: "1px solid " + (selected.inScope ? C.success + "66" : C.accent + "66"), color: selected.inScope ? C.success : C.accent, borderRadius: 6, padding: "6px 14px", cursor: "pointer", fontSize: 10, fontFamily: "inherit", fontWeight: "bold", whiteSpace: "nowrap" }}>
+                  {selected.inScope ? "✓ In Scope" : "Mark In Scope"}
+                </button>
+              </div>
+
+              <div className="tab-scroll" style={{ display: "flex", gap: 4, marginBottom: 24, borderBottom: "1px solid " + C.border, paddingBottom: 12 }}>
+                {["summary","mmc","controls","source"].map(function(tab) {
+                  return (
+                    <button key={tab} className={"tab " + (activeTab === tab ? "ton" : "toff")} onClick={function() { setActiveTab(tab); }}>
+                      {tab === "summary" ? "📋 Summary" : tab === "mmc" ? ("🏢 MMC (" + (a.mmcScope ? a.mmcScope.length : 0) + ")") : tab === "controls" ? ("⚡ Controls (" + (a.controls ? a.controls.length : 0) + ")") : "📄 Source"}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {activeTab === "summary" && (
+                <div>
+                  <div style={sHead}>◈ Executive Summary</div>
+                  <div style={sumBox}>{a.summary}</div>
+
+                  {a.mmcRisk && (function() {
+                    var r = a.mmcRisk;
+                    var rc = riskColor(r.rating);
+                    var score = Math.min(10, Math.max(1, r.score || 5));
+                    return (
+                      <div style={{ marginTop: 24 }}>
+                        <div style={sHead}>◈ MMC Business Risk Rating</div>
+                        <div style={{ background: C.panel, border: "1px solid " + rc + "44", borderRadius: 12, overflow: "hidden" }}>
+                          <div style={{ background: rc + "18", borderBottom: "1px solid " + rc + "33", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                            <div>
+                              <div style={{ fontSize: 11, color: rc, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 4 }}>MMC-Specific Risk Level</div>
+                              <div style={{ fontSize: 22, fontWeight: "bold", color: rc }}>{r.rating}</div>
+                            </div>
+                            <div style={{ textAlign: "center" }}>
+                              <div style={{ fontSize: 28, fontWeight: "bold", color: rc, lineHeight: 1 }}>{score}</div>
+                              <div style={{ fontSize: 10, color: C.muted }}>/ 10</div>
+                              <div style={{ width: 80, height: 6, background: C.border, borderRadius: 3, marginTop: 6, overflow: "hidden" }}>
+                                <div style={{ width: (score * 10) + "%", height: "100%", background: rc, borderRadius: 3 }} />
+                              </div>
+                            </div>
+                          </div>
+                          <div style={{ padding: "14px 20px", borderBottom: "1px solid " + C.border, fontSize: 12, color: C.text, lineHeight: 1.6 }}>{r.summary}</div>
+                          <div className="risk-3col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr" }}>
+                            {[["💰 Financial", r.financialExposure, C.critical], ["📢 Reputational", r.reputationalExposure, C.warning], ["⚙️ Operational", r.operationalExposure, C.accent]].map(function(item, i) {
+                              return (
+                                <div key={item[0]} style={{ padding: "13px 16px", borderRight: i < 2 ? "1px solid " + C.border : "none", borderTop: "1px solid " + C.border }}>
+                                  <div style={{ fontSize: 10, color: item[2], letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 6 }}>{item[0]}</div>
+                                  <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{item[1]}</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {r.mitigatingFactors && r.mitigatingFactors.length > 0 && (
+                            <div style={{ padding: "12px 20px", borderTop: "1px solid " + C.border, background: C.success + "08" }}>
+                              <div style={{ fontSize: 10, color: C.success, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>✓ Mitigating Factors</div>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                {r.mitigatingFactors.map(function(f, i) {
+                                  return <span key={i} style={{ background: C.success + "15", border: "1px solid " + C.success + "33", color: C.success, padding: "3px 10px", borderRadius: 4, fontSize: 11 }}>{f}</span>;
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {a.impactAreas && a.impactAreas.length > 0 && (
+                    <div style={{ marginTop: 24 }}>
+                      <div style={sHead}>◈ Impact Areas</div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {a.impactAreas.map(function(area, i) {
+                          return <span key={i} style={{ padding: "3px 10px", borderRadius: 4, fontSize: 11, fontWeight: "bold", background: C.accent3 + "22", border: "1px solid " + C.accent3 + "44", color: C.accent }}>{area}</span>;
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {a.chapters && a.chapters.length > 0 && (
+                    <div style={{ marginTop: 24 }}>
+                      <div style={sHead}>◈ Document Structure — Key Chapters</div>
+                      <div style={{ background: C.panel, border: "1px solid " + C.border, borderRadius: 10, overflow: "hidden" }}>
+                        {a.chapters.map(function(ch, i) {
+                          return (
+                            <div key={i} style={{ display: "flex", gap: 14, padding: "10px 16px", borderBottom: i < a.chapters.length - 1 ? "1px solid " + C.border : "none", alignItems: "baseline" }}>
+                              <div style={{ fontSize: 10, color: C.accent, fontWeight: "bold", letterSpacing: "0.1em", flexShrink: 0, minWidth: 90 }}>{ch.number}</div>
+                              <div style={{ fontSize: 12, color: C.text }}>{ch.title}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: 24 }}>
+                    <div style={sHead}>◈ Key Legislative Provisions</div>
+                    {[
+                      { label: "Transitional Period", icon: "⏳", value: a.transitionalPeriod },
+                      { label: "Transposition Date", icon: "📅", value: a.transpositionDate },
+                      { label: "Repeal of Existing Legislation", icon: "🗑", value: a.repealOfLegislation },
+                      { label: "Entry into Force", icon: "✅", value: a.entryIntoForce },
+                    ].map(function(item) {
+                      var isNA = !item.value || item.value === "N/A";
+                      return (
+                        <div key={item.label} style={{ background: C.panel, border: "1px solid " + (isNA ? C.border : C.accent + "44"), borderRadius: 10, overflow: "hidden", marginBottom: 10 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", borderBottom: isNA ? "none" : "1px solid " + C.border, background: isNA ? "transparent" : C.accent + "0a" }}>
+                            <span style={{ fontSize: 14 }}>{item.icon}</span>
+                            <span style={{ fontSize: 10, fontWeight: "bold", letterSpacing: "0.15em", color: isNA ? C.muted : C.accent, textTransform: "uppercase" }}>{item.label}</span>
+                            {isNA && <span style={{ marginLeft: "auto", fontSize: 10, color: C.muted, background: C.border, padding: "1px 7px", borderRadius: 3 }}>N/A</span>}
+                          </div>
+                          {!isNA && <div style={{ padding: "12px 16px", fontSize: 12, color: C.text, lineHeight: 1.7, fontStyle: "italic", whiteSpace: "pre-wrap" }}>{item.value}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "mmc" && (
+                <div>
+                  <div style={sHead}>◈ MMC Entity Scope Assessment</div>
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 20, lineHeight: 1.6 }}>AI-assessed scope across Marsh McLennan group entities. Always validate with legal counsel.</div>
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ fontSize: 10, letterSpacing: "0.15em", color: C.critical, textTransform: "uppercase", marginBottom: 10 }}>{"● In Scope (" + (a.mmcScope ? a.mmcScope.filter(function(e) { return e.inScope; }).length : 0) + " entities)"}</div>
+                    {a.mmcScope && a.mmcScope.filter(function(e) { return e.inScope; }).map(function(e, i) {
+                      return (
+                        <div key={i} style={{ background: C.panel, border: "1px solid " + C.critical + "33", borderLeft: "3px solid " + C.critical, borderRadius: 8, padding: "12px 16px", marginBottom: 8, display: "flex", gap: 12 }}>
+                          <span style={{ fontSize: 16, flexShrink: 0 }}>🏢</span>
+                          <div><div style={{ fontSize: 13, fontWeight: "bold", color: C.text, marginBottom: 3 }}>{e.entity}</div><div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{e.reason}</div></div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, letterSpacing: "0.15em", color: C.success, textTransform: "uppercase", marginBottom: 10 }}>{"● Out of Scope (" + (a.mmcScope ? a.mmcScope.filter(function(e) { return !e.inScope; }).length : 0) + " entities)"}</div>
+                    {a.mmcScope && a.mmcScope.filter(function(e) { return !e.inScope; }).map(function(e, i) {
+                      return (
+                        <div key={i} style={{ background: C.panel, border: "1px solid " + C.border, borderLeft: "3px solid " + C.success, borderRadius: 8, padding: "12px 16px", marginBottom: 8, display: "flex", gap: 12 }}>
+                          <span style={{ fontSize: 16, flexShrink: 0, opacity: 0.4 }}>🏢</span>
+                          <div><div style={{ fontSize: 13, fontWeight: "bold", color: C.muted, marginBottom: 3 }}>{e.entity}</div><div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>{e.reason}</div></div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "controls" && (
+                <div>
+                  {(function() {
+                    var allControls = getAllControls(regulations, selected.id);
+                    var controls = a.controls || [];
+                    var newCount = controls.filter(function(c) { return !isDuplicate(c.title, allControls); }).length;
+                    var existCount = controls.length - newCount;
+                    return (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                          <div style={sHead}>◈ Compliance Controls</div>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            {newCount > 0 && <span style={{ fontSize: 9, padding: "3px 9px", borderRadius: 3, background: C.accent + "22", border: "1px solid " + C.accent + "44", color: C.accent, fontWeight: "bold" }}>{newCount + " NEW"}</span>}
+                            {existCount > 0 && <span style={{ fontSize: 9, padding: "3px 9px", borderRadius: 3, background: C.border, color: C.muted, fontWeight: "bold" }}>{existCount + " EXISTING"}</span>}
+                          </div>
+                        </div>
+                        {existCount > 0 && newCount > 0 && <div style={{ fontSize: 10, color: C.warning, marginBottom: 14, padding: "8px 12px", background: C.warning + "11", border: "1px solid " + C.warning + "33", borderRadius: 6 }}>⚠ Controls marked EXISTING already appear in a previously analysed regulation. Focus on NEW controls for the incremental delta.</div>}
+                        {controls.map(function(ctrl, i) {
+                          var dupMatch = isDuplicate(ctrl.title, allControls);
+                          var isNew = !dupMatch;
+                          var open = !!openActions[i];
+                          var catColor = { Governance: "#7c3aed", Risk: C.critical, Compliance: C.warning, Technology: C.accent, Operational: "#10b981", Reporting: "#f59e0b" }[ctrl.category] || C.muted;
+                          return (
+                            <div key={i} style={{ background: C.panel, border: "1px solid " + (isNew ? C.accent + "44" : C.border), borderLeft: "3px solid " + (isNew ? C.accent : C.border), borderRadius: 9, marginBottom: 10, overflow: "hidden", opacity: isNew ? 1 : 0.65 }}>
+                              <div style={{ padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start", cursor: "pointer" }} onClick={function() { setOpenActions(function(prev) { return Object.assign({}, prev, { [i]: !prev[i] }); }); }}>
+                                <div style={{ background: C.accent + "22", border: "1px solid " + C.accent + "44", color: C.accent, width: 52, height: 22, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: "bold", flexShrink: 0, letterSpacing: "0.05em" }}>{ctrl.controlId || ("CTRL-" + String(i+1).padStart(3,"0"))}</div>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4, flexWrap: "wrap" }}>
+                                    <div style={{ fontSize: 12, fontWeight: "bold", color: isNew ? C.text : C.muted }}>{ctrl.title}</div>
+                                    <span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 3, background: isNew ? C.accent + "22" : C.border, border: "1px solid " + (isNew ? C.accent + "44" : C.border), color: isNew ? C.accent : C.muted, fontWeight: "bold", letterSpacing: "0.08em" }}>{isNew ? "NEW" : "EXISTING"}</span>
+                                    {ctrl.category && <span style={{ fontSize: 8, padding: "2px 6px", borderRadius: 3, background: catColor + "22", border: "1px solid " + catColor + "44", color: catColor, fontWeight: "bold" }}>{ctrl.category}</span>}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, marginBottom: 6 }}>{ctrl.description}</div>
+                                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                                    {ctrl.priority && <span style={{ padding: "2px 7px", borderRadius: 3, fontSize: 9, fontWeight: "bold", ...(ctrl.priority === "Immediate" ? { background: "#ef444422", border: "1px solid #ef444444", color: "#ef4444" } : ctrl.priority === "Short-term" ? { background: "#f59e0b22", border: "1px solid #f59e0b44", color: "#f59e0b" } : { background: "#10b98122", border: "1px solid #10b98144", color: "#10b981" }) }}>{ctrl.priority}</span>}
+                                    {ctrl.owner && <span style={{ padding: "2px 7px", borderRadius: 3, fontSize: 9, background: C.border, color: C.muted }}>{"Owner: " + ctrl.owner}</span>}
+                                    {ctrl.articleReference && <span style={{ padding: "2px 7px", borderRadius: 3, fontSize: 9, background: C.accent3 + "22", border: "1px solid " + C.accent3 + "33", color: "#a78bfa" }}>{ctrl.articleReference}</span>}
+                                    {dupMatch && <span style={{ padding: "2px 7px", borderRadius: 3, fontSize: 9, background: C.border, color: C.muted }}>{"See: " + dupMatch.regTitle}</span>}
+                                  </div>
+                                </div>
+                                <span style={{ color: C.muted, fontSize: 10, flexShrink: 0, marginTop: 4, display: "inline-block", transform: open ? "rotate(180deg)" : "none" }}>▼</span>
+                              </div>
+                              {open && (
+                                <div style={{ borderTop: "1px solid " + C.border, padding: "12px 16px 16px 80px" }}>
+                                  {ctrl.steps && ctrl.steps.length > 0 && (
+                                    <div style={{ marginBottom: 12 }}>
+                                      <div style={{ fontSize: 9, letterSpacing: "0.18em", color: C.accent, textTransform: "uppercase", marginBottom: 9 }}>◈ Implementation Steps</div>
+                                      {ctrl.steps.map(function(step, si) {
+                                        return (
+                                          <div key={si} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 7 }}>
+                                            <div style={{ background: C.accent3 + "33", border: "1px solid " + C.accent3 + "55", color: "#a78bfa", width: 18, height: 18, borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: "bold", flexShrink: 0, marginTop: 1 }}>{si + 1}</div>
+                                            <div style={{ fontSize: 11, color: C.text, lineHeight: 1.6 }}>{String(step).replace(/^Step \d+:\s*/i, "")}</div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                  {ctrl.testingCriteria && (
+                                    <div style={{ background: C.success + "11", border: "1px solid " + C.success + "33", borderRadius: 6, padding: "9px 12px", display: "flex", gap: 8 }}>
+                                      <span style={{ color: C.success, flexShrink: 0, fontSize: 12 }}>✓</span>
+                                      <div>
+                                        <div style={{ fontSize: 9, letterSpacing: "0.1em", color: C.success, textTransform: "uppercase", marginBottom: 3 }}>Testing Criteria</div>
+                                        <div style={{ fontSize: 11, color: C.text, lineHeight: 1.5 }}>{ctrl.testingCriteria}</div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {controls.length > 0 && (
+                          <div style={{ marginTop: 16, padding: "12px 16px", background: C.panel, border: "1px solid " + C.border, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                            <div>
+                              <div style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>Export new controls to downstream system</div>
+                              <div style={{ fontSize: 9, color: C.muted }}>{newCount + " new controls · " + controls.length + " total"}</div>
+                            </div>
+                            <button
+                              onClick={function() {
+                                var newControls = controls.filter(function(c) { return !isDuplicate(c.title, allControls); });
+                                var payload = { regulationId: selected.id, regulationTitle: selected.title, reference: a.referenceNumber, exportedAt: new Date().toISOString(), controls: newControls };
+                                var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+                                var url = URL.createObjectURL(blob);
+                                var link = document.createElement("a");
+                                link.href = url; link.download = "controls-" + (a.referenceNumber || selected.id) + ".json";
+                                link.click(); URL.revokeObjectURL(url);
+                              }}
+                              style={{ background: "linear-gradient(135deg," + C.accent + "22," + C.accent3 + "22)", border: "1px solid " + C.accent, color: C.accent, padding: "7px 16px", borderRadius: 6, cursor: "pointer", fontSize: 10, fontFamily: "inherit", fontWeight: "bold" }}>
+                              ↓ Export New Controls (JSON)
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {activeTab === "source" && (
+                <div>
+                  <div style={sHead}>◈ Source Text</div>
+                  <div style={{ ...sumBox, whiteSpace: "pre-wrap", fontSize: 12, color: C.muted, maxHeight: 500, overflowY: "auto" }}>{selected.text}</div>
+                </div>
+              )}
             </div>
-            <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.7, marginBottom: 10 }}>{ctrl.description}</p>
-            <div style={{ fontSize: 13, color: C.muted, marginBottom: 4 }}><span style={{ color: C.text, fontWeight: 600 }}>Owner:</span> {ctrl.owner}</div>
-            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}><span style={{ color: C.text, fontWeight: 600 }}>Testing:</span> {ctrl.testingCriteria}</div>
-            <div style={{ fontSize: 12, color: C.muted, fontWeight: 700, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Required by:</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {ctrl.regulations.map(rId => {
-                const iS = inScopeIds.has(rId);
-                const nm = allRegs.find(r => r.id === rId)?.name || rId;
-                return (<span key={rId} style={{ fontSize: 12, padding: "3px 10px", borderRadius: 14, border: `1px solid ${iS ? C.greenBorder : C.border}`, background: iS ? C.greenBg : "transparent", color: iS ? C.green : C.muted }}>{rId}{iS ? " ✓" : ""} — {nm.substring(0, 28)}</span>);
+          ) : null}
+        </div>
+      </div>
+
+      {showSources && <SourcesModal sources={sources} setSources={updateSources} onClose={function() { setShowSources(false); }} />}
+      {showScanner && <ScannerModal scanning={scanning} scanProgress={scanProgress} scanResults={scanResults} onClose={function() { setShowScanner(false); }} onRescan={scanAllSources} onAnalyse={handleAnalyseFromScan} />}
+
+      {/* Mobile Sidebar Drawer */}
+      {IS_MOBILE && showMobileSidebar && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex" }}>
+          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.7)" }} onClick={function() { setShowMobileSidebar(false); }} />
+          <div style={{ position: "relative", width: "88vw", maxWidth: 360, background: C.panel, borderRight: "1px solid " + C.border, overflowY: "auto", animation: "slideUp 0.25s ease", zIndex: 1, display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid " + C.border, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 12, fontWeight: "bold", color: C.accent, letterSpacing: "0.1em" }}>DELPHI</span>
+              <button onClick={function() { setShowMobileSidebar(false); }} style={{ background: "transparent", border: "none", color: C.muted, fontSize: 20, cursor: "pointer" }}>✕</button>
+            </div>
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid " + C.border }}>
+              <span style={{ fontSize: 9, color: C.muted, letterSpacing: "0.18em", textTransform: "uppercase", marginBottom: 7, display: "block" }}>Ingest Regulation</span>
+              <input type="text" placeholder="Title (optional)..." value={inputTitle} onChange={function(e) { setInputTitle(e.target.value); }} style={{ ...iStyle, marginBottom: 8, display: "block" }} />
+              <UploadZone onFile={handleFileUpload} uploading={uploading} />
+              <textarea placeholder="Paste regulation text..." value={inputText} onChange={function(e) { setInputText(e.target.value); }} rows={4} style={{ ...iStyle, resize: "none", lineHeight: 1.6, marginBottom: 8, display: "block" }} />
+              <button className="btnp" style={{ ...btnP, opacity: !inputText.trim() || analyzing || uploading ? 0.5 : 1 }} onClick={function() { setShowMobileSidebar(false); addRegulation(); }} disabled={!inputText.trim() || analyzing || uploading}>
+                {analyzing ? "↻ Analyzing..." : "→ Analyze"}
+              </button>
+            </div>
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid " + C.border }}>
+              <span style={{ fontSize: 9, color: C.muted, letterSpacing: "0.18em", textTransform: "uppercase", marginBottom: 7, display: "block" }}>Sample Regulations</span>
+              {SAMPLE_REGS.map(function(s, i) {
+                return <button key={i} className="hov" style={btnS} onClick={function() { setShowMobileSidebar(false); loadSample(s); }}><span>+</span><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title.split("—")[0].trim()}</span></button>;
               })}
             </div>
-          </div>
-        );
-      })}
-      {controls.length === 0 && (inScopeIds.size > 0 || showAll) && (
-        <div style={{ textAlign: "center", color: C.muted, padding: "56px 0", fontSize: 14 }}>No controls match your filters</div>
-      )}
-    </div>
-  );
-}
-
-function Timeline({ allRegs, scopeMap }) {
-  const [filter, setFilter] = useState("All");
-  const withDeadlines = useMemo(() => { let l = allRegs.filter(r => r.deadline); if (filter === "In Scope") l = l.filter(r => (scopeMap[r.id] || "Pending") === "In Scope"); if (filter === "Upcoming") l = l.filter(r => daysUntil(r.deadline) !== null && daysUntil(r.deadline) >= 0); return l.sort((a, b) => new Date(a.deadline) - new Date(b.deadline)); }, [allRegs, scopeMap, filter]);
-  const grouped = useMemo(() => { const g = {}; withDeadlines.forEach(r => { const y = r.deadline.substring(0, 4); if (!g[y]) g[y] = []; g[y].push(r); }); return g; }, [withDeadlines]);
-  const sel = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "9px 14px", fontSize: 14, cursor: "pointer", outline: "none" };
-  return (
-    <div className="fadeIn">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22, flexWrap: "wrap", gap: 8 }}>
-        <div><h1 style={{ fontSize: 26, fontWeight: 800, color: C.text }}>Regulatory Timeline</h1><p style={{ fontSize: 15, color: C.muted, marginTop: 6 }}>{withDeadlines.length} regulations with deadlines</p></div>
-        <select value={filter} onChange={e => setFilter(e.target.value)} style={sel}><option>All</option><option>In Scope</option><option>Upcoming</option></select>
-      </div>
-      {Object.keys(grouped).length === 0 && <div style={{ textAlign: "center", color: C.muted, padding: "64px 0" }}>No deadlines match your filter</div>}
-      {Object.entries(grouped).sort().map(([year, regs]) => (
-        <div key={year} style={{ marginBottom: 36 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
-            <div style={{ fontSize: 20, fontWeight: 800, color: C.accent }}>{year}</div>
-            <div style={{ height: 1, flex: 1, background: C.border }} />
-            <span style={{ fontSize: 12, color: C.muted }}>{regs.length} deadline{regs.length !== 1 ? "s" : ""}</span>
-          </div>
-          <div style={{ paddingLeft: 22, position: "relative" }}>
-            <div style={{ position: "absolute", left: 7, top: 10, bottom: 10, width: 1, background: C.border }} />
-            {regs.map(r => { const days = daysUntil(r.deadline); const col = urgencyColor(days); const cs = scopeMap[r.id] || "Pending"; return (<div key={r.id} style={{ position: "relative", display: "flex", alignItems: "flex-start", gap: 18, marginBottom: 12 }}><div style={{ position: "absolute", left: -17, top: 16, width: 11, height: 11, borderRadius: "50%", border: `2px solid ${col}`, background: days !== null && days < 0 ? col : "transparent", flexShrink: 0 }} /><div style={{ flex: 1, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, color: C.text, fontSize: 14 }}>{r.name}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference} · {r.region} · {r.domain}</div></div><div style={{ textAlign: "right", flexShrink: 0 }}><div style={{ fontWeight: 700, fontSize: 13, color: col }}>{formatDeadline(r.deadline)}</div><div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{days < 0 ? `${Math.abs(days)}d past` : days === 0 ? "Today" : `${days}d`}</div><div style={{ marginTop: 6 }}><Badge text={cs} style={scopeStyle(cs)} /></div></div></div></div>); })}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Calendar({ allRegs, scopeMap }) {
-  const today = new Date();
-  const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
-  const [selectedDay, setSelectedDay] = useState(null); const [filter, setFilter] = useState("All");
-  const month = viewDate.getMonth(); const year = viewDate.getFullYear();
-  const firstDay = new Date(year, month, 1).getDay(); const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  const withDeadlines = useMemo(() => { let l = allRegs.filter(r => r.deadline); if (filter === "In Scope") l = l.filter(r => (scopeMap[r.id] || "Pending") === "In Scope"); return l; }, [allRegs, scopeMap, filter]);
-  const regsByDay = useMemo(() => { const m = {}; withDeadlines.forEach(r => { const d = new Date(r.deadline + "T00:00:00"); if (d.getMonth() === month && d.getFullYear() === year) { const day = d.getDate(); if (!m[day]) m[day] = []; m[day].push(r); } }); return m; }, [withDeadlines, month, year]);
-  const sel = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "9px 14px", fontSize: 14, cursor: "pointer", outline: "none" };
-  const btn = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "9px 14px", fontSize: 14, cursor: "pointer" };
-  return (
-    <div className="fadeIn">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22, flexWrap: "wrap", gap: 8 }}>
-        <div><h1 style={{ fontSize: 26, fontWeight: 800, color: C.text }}>Regulatory Calendar</h1><p style={{ fontSize: 15, color: C.muted, marginTop: 6 }}>{MONTHS[month]} {year}</p></div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <select value={filter} onChange={e => setFilter(e.target.value)} style={sel}><option>All</option><option>In Scope</option></select>
-          <button onClick={() => setViewDate(new Date(year, month - 1, 1))} style={btn}>‹</button>
-          <span style={{ fontSize: 14, fontWeight: 700, color: C.text, minWidth: 150, textAlign: "center" }}>{MONTHS[month]} {year}</span>
-          <button onClick={() => setViewDate(new Date(year, month + 1, 1))} style={btn}>›</button>
-          <button onClick={() => { setViewDate(new Date(today.getFullYear(), today.getMonth(), 1)); setSelectedDay(null); }} style={{ ...btn, color: C.accent }}>Today</button>
-        </div>
-      </div>
-      <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", borderBottom: `1px solid ${C.border}` }}>
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(d => <div key={d} style={{ padding: "10px 0", textAlign: "center", fontSize: 12, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>{d}</div>)}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
-          {Array.from({ length: firstDay }).map((_, i) => <div key={`e${i}`} style={{ minHeight: 80, borderRight: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, background: C.bg }} />)}
-          {Array.from({ length: daysInMonth }).map((_, i) => {
-            const day = i + 1; const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-            const regsHere = regsByDay[day] || []; const isSel = selectedDay === day;
-            return (<div key={day} onClick={() => setSelectedDay(isSel ? null : day)} style={{ minHeight: 80, borderRight: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, padding: 8, cursor: "pointer", background: isSel ? "rgba(99,102,241,0.08)" : "transparent", transition: "background 0.15s" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%", marginBottom: 4, background: isToday ? C.accent : "transparent", color: isToday ? "#fff" : C.muted }}>{day}</div>
-              {regsHere.slice(0, 2).map(r => { const col = urgencyColor(daysUntil(r.deadline)); return (<div key={r.id} style={{ fontSize: 11, padding: "2px 5px", borderRadius: 4, marginBottom: 2, background: `${col}20`, color: col, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{r.name.substring(0, 16)}</div>); })}
-              {regsHere.length > 2 && <div style={{ fontSize: 11, color: C.muted }}>+{regsHere.length - 2} more</div>}
-            </div>);
-          })}
-        </div>
-      </div>
-      {selectedDay && (regsByDay[selectedDay] || []).length > 0 && (
-        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20, marginTop: 14 }}>
-          <div style={{ fontWeight: 700, color: C.text, fontSize: 15, marginBottom: 14 }}>{MONTHS[month]} {selectedDay}, {year} — {(regsByDay[selectedDay] || []).length} deadline{(regsByDay[selectedDay] || []).length !== 1 ? "s" : ""}</div>
-          {(regsByDay[selectedDay] || []).map(r => { const days = daysUntil(r.deadline); return (<div key={r.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, paddingBottom: 12, marginBottom: 12, borderBottom: `1px solid ${C.border}` }}><div><div style={{ fontWeight: 600, color: C.text, fontSize: 14 }}>{r.name}</div><div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>{r.reference} · {r.region}</div></div><div style={{ textAlign: "right", flexShrink: 0 }}><Badge text={scopeMap[r.id] || "Pending"} style={scopeStyle(scopeMap[r.id] || "Pending")} /><div style={{ fontSize: 12, marginTop: 6, color: urgencyColor(days) }}>{days === 0 ? "Today" : days < 0 ? `${Math.abs(days)}d past` : `${days}d`}</div></div></div>); })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export default function App() {
-  const [theme, setTheme] = useState(() => storage.get("delphi_theme", "dark"));
-  // Keep C in sync with theme - must happen before render
-  C = theme === "light" ? { ...LIGHT_THEME } : { ...DARK_THEME };
-  const G = getGlobalStyles(theme);
-  const toggleTheme = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    storage.set("delphi_theme", next);
-  };
-  const [authed, setAuthed] = useState(() => storage.get(SESSION_KEY, false));
-  const [view, setView] = useState("dashboard");
-  const [scopeMap, setScopeMap] = useState(() => storage.get(SCOPE_KEY, {}));
-  const [analysisMap, setAnalysisMap] = useState(() => storage.get(ANALYSIS_KEY, {}));
-  const [deletedIds, setDeletedIds] = useState(() => storage.get("delphi_deleted", []));
-  const [deletedControlIds, setDeletedControlIds] = useState(() => storage.get("delphi_deleted_controls", []));
-  const [isAdmin, setIsAdmin] = useState(() => storage.get("delphi_admin", false));
-  const [analyzeRegId, setAnalyzeRegId] = useState(null);
-  const [savedUrls, setSavedUrls] = useState(() => storage.get(URLS_KEY, []));
-  const [ingestedRegs, setIngestedRegs] = useState(() => storage.get(INGESTED_KEY, []));
-
-  const savePersistentUrls = useCallback((newList) => {
-    setSavedUrls(newList);
-    storage.set(URLS_KEY, newList);
-    jbSet(URLS_KEY, newList);
-  }, []);
-
-  const saveIngestedRegs = useCallback((newList) => {
-    setIngestedRegs(newList);
-    storage.set(INGESTED_KEY, newList);
-    jbSet(INGESTED_KEY, newList);
-  }, []);
-
-  // Ingest a regulation from URL scan - adds to ingested list, no duplicates
-  const ingestRegulation = useCallback((reg, sourceUrl, sourceTitle) => {
-    setIngestedRegs(prev => {
-      // Check for duplicates by reference or name
-      const isDupe = prev.some(r =>
-        (r.reference && reg.reference && r.reference.toLowerCase() === reg.reference.toLowerCase()) ||
-        r.name.toLowerCase() === reg.name.toLowerCase()
-      );
-      if (isDupe) return prev;
-      const newReg = {
-        ...reg,
-        id: `ING-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`,
-        source: sourceUrl,
-        sourceTitle: sourceTitle || sourceUrl,
-        ingestedAt: new Date().toISOString(),
-        hasChanges: false,
-        lastUpdated: new Date().toISOString(),
-        isIngested: true,
-      };
-      const updated = [...prev, newReg];
-      storage.set(INGESTED_KEY, updated);
-      jbSet(INGESTED_KEY, updated);
-      return updated;
-    });
-  }, []);
-
-  const updateIngestedReg = useCallback((id, updates) => {
-    setIngestedRegs(prev => {
-      const updated = prev.map(r => r.id === id ? { ...r, ...updates, lastUpdated: new Date().toISOString(), hasChanges: true } : r);
-      storage.set(INGESTED_KEY, updated);
-      jbSet(INGESTED_KEY, updated);
-      return updated;
-    });
-  }, []);
-
-  const clearChangesFlag = useCallback((id) => {
-    setIngestedRegs(prev => {
-      const updated = prev.map(r => r.id === id ? { ...r, hasChanges: false } : r);
-      storage.set(INGESTED_KEY, updated);
-      jbSet(INGESTED_KEY, updated);
-      return updated;
-    });
-  }, []);
-  const [syncing, setSyncing] = useState(false);
-  const [lastSync, setLastSync] = useState(null);
-
-  // Apply remote data to state, only update if actually changed
-  const applyRemoteData = useCallback((rec) => {
-    if (!rec) return;
-    if (rec.delphi_scope && Object.keys(rec.delphi_scope).length > 0) {
-      setScopeMap(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_scope) ? { ...rec.delphi_scope } : p);
-      storage.set(SCOPE_KEY, rec.delphi_scope);
-    }
-    if (rec.delphi_analyses && Object.keys(rec.delphi_analyses).length > 0) {
-      setAnalysisMap(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_analyses) ? { ...rec.delphi_analyses } : p);
-      storage.set(ANALYSIS_KEY, rec.delphi_analyses);
-    }
-    if (rec.delphi_urls?.length > 0) {
-      setSavedUrls(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_urls) ? rec.delphi_urls : p);
-      storage.set(URLS_KEY, rec.delphi_urls);
-    }
-    if (rec.delphi_ingested?.length > 0) {
-      setIngestedRegs(p => JSON.stringify(p) !== JSON.stringify(rec.delphi_ingested) ? rec.delphi_ingested : p);
-      storage.set(INGESTED_KEY, rec.delphi_ingested);
-    }
-    setLastSync(new Date());
-  }, []);
-
-  // On mount: load localStorage immediately (instant), then fetch remote and start polling
-  useEffect(() => {
-    // Step 1: Show local data instantly (no loading screen)
-    const localScope = storage.get(SCOPE_KEY, {});
-    const localAnalyses = storage.get(ANALYSIS_KEY, {});
-    const localUrls = storage.get(URLS_KEY, []);
-    const localIngested = storage.get(INGESTED_KEY, []);
-    if (Object.keys(localScope).length > 0) setScopeMap(localScope);
-    if (Object.keys(localAnalyses).length > 0) setAnalysisMap(localAnalyses);
-    if (localUrls.length > 0) setSavedUrls(localUrls);
-    if (localIngested.length > 0) setIngestedRegs(localIngested);
-
-    // Step 2: Fetch remote immediately and migrate if needed
-    const initialFetch = async () => {
-      try {
-        const rec = await jbGet();
-        applyRemoteData(rec);
-        // Migrate local-only data to remote if remote is empty
-        if (!rec.delphi_scope && Object.keys(localScope).length > 0) jbSet(SCOPE_KEY, localScope);
-        if (!rec.delphi_analyses && Object.keys(localAnalyses).length > 0) jbSet(ANALYSIS_KEY, localAnalyses);
-        if (!rec.delphi_urls?.length && localUrls.length > 0) jbSet(URLS_KEY, localUrls);
-        if (!rec.delphi_ingested?.length && localIngested.length > 0) jbSet(INGESTED_KEY, localIngested);
-      } catch (e) { console.error("Initial sync failed", e); }
-    };
-    initialFetch();
-
-    // Step 3: Poll every 15 seconds for cross-device live sync
-    const interval = setInterval(async () => {
-      try { applyRemoteData(await jbGet()); } catch {}
-    }, 15000);
-
-    return () => clearInterval(interval);
-  }, [applyRemoteData]);
-
-  const syncNow = async () => {
-    setSyncing(true);
-    try {
-      const rec = await jbGet();
-      if (rec.delphi_scope && Object.keys(rec.delphi_scope).length > 0) { setScopeMap({ ...rec.delphi_scope }); storage.set(SCOPE_KEY, rec.delphi_scope); }
-      if (rec.delphi_analyses && Object.keys(rec.delphi_analyses).length > 0) { setAnalysisMap({ ...rec.delphi_analyses }); storage.set(ANALYSIS_KEY, rec.delphi_analyses); }
-      if (rec.delphi_urls?.length > 0) { setSavedUrls(rec.delphi_urls); storage.set(URLS_KEY, rec.delphi_urls); }
-      if (rec.delphi_ingested?.length > 0) { setIngestedRegs(rec.delphi_ingested); storage.set(INGESTED_KEY, rec.delphi_ingested); }
-        if (rec.delphi_urls) { setSavedUrls(rec.delphi_urls); storage.set(URLS_KEY, rec.delphi_urls); }
-      setLastSync(new Date());
-    } catch { }
-    setSyncing(false);
-  };
-
-  const allRegs = useMemo(() => { const d = new Set(deletedIds); return REGULATIONS.filter(r => !d.has(r.id)); }, [deletedIds]);
-  const inScopeCount = useMemo(() => Object.values(scopeMap).filter(v => v === "In Scope").length, [scopeMap]);
-  const login = () => { setAuthed(true); storage.set(SESSION_KEY, true); };
-  const logout = () => { setAuthed(false); storage.set(SESSION_KEY, false); };
-  const setScopeFor = useCallback((id, val) => { setScopeMap(prev => { const n = { ...prev, [id]: val }; jbSet("delphi_scope", n); storage.set(SCOPE_KEY, n); return n; }); }, []);
-  const onAnalysisComplete = useCallback((id, data) => { setAnalysisMap(prev => { const n = { ...prev, [id]: data }; jbSet("delphi_analyses", n); storage.set(ANALYSIS_KEY, n); return n; }); }, []);
-  const onDelete = useCallback((id) => { setDeletedIds(prev => { const n = [...prev, id]; storage.set("delphi_deleted", n); return n; }); }, []);
-  const onDeleteControl = useCallback((id) => { setDeletedControlIds(prev => { const n = [...prev, id]; storage.set("delphi_deleted_controls", n); return n; }); }, []);
-
-  if (!authed) return <Login onLogin={login} theme={theme} toggleTheme={toggleTheme} />;
-
-  const allRegsWithIngested = useMemo(() => {
-    // Merge ingested regs that don't already exist in master list
-    const masterIds = new Set(allRegs.map(r => r.id));
-    const masterNames = new Set(allRegs.map(r => r.name.toLowerCase()));
-    const newOnes = ingestedRegs.filter(r => !masterIds.has(r.id) && !masterNames.has(r.name.toLowerCase()));
-    return [...allRegs, ...newOnes];
-  }, [allRegs, ingestedRegs]);
-  const vp = { allRegs: allRegsWithIngested, scopeMap, analysisMap, theme };
-  return (
-    <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
-      <style>{G}</style>
-      <Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount} />
-      <main style={{ marginLeft: 248, minHeight: "100vh" }}>
-        <div style={{ maxWidth: 1440, margin: "0 auto", padding: "28px 36px" }}>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 22, alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.green, display: "inline-block", boxShadow: `0 0 6px ${C.green}` }} title="Auto-syncing every 15 seconds" />
-              {lastSync && <span style={{ fontSize: 12, color: C.muted }}>Synced {lastSync.toLocaleTimeString()}</span>}
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              <div style={{ padding: "10px 16px 4px", fontSize: 9, color: C.muted, letterSpacing: "0.18em", textTransform: "uppercase" }}>Analyzed Regulations</div>
+              {regulations.length === 0
+                ? <div style={{ padding: "12px 16px", color: C.muted, fontSize: 10, lineHeight: 1.6 }}>No regulations yet.</div>
+                : regulations.map(function(reg) {
+                    return (
+                      <div key={reg.id} className="hov"
+                        style={{ padding: "11px 16px", borderBottom: "1px solid " + C.border, cursor: "pointer", borderLeft: "3px solid " + (reg.inScope ? C.success : selected && selected.id === reg.id ? C.accent : "transparent") }}
+                        onClick={function() { setSelected(reg); setActiveTab("summary"); setMobileView("detail"); setShowMobileSidebar(false); }}>
+                        <div style={{ fontSize: 11, fontWeight: "bold", color: C.text, marginBottom: 3 }}>{reg.title}</div>
+                        <div style={{ fontSize: 9, color: C.muted }}>
+                          {reg.loading ? <span style={{ color: C.accent }}>↻ Analyzing...</span>
+                            : reg.analysis ? <span style={{ color: riskColor(reg.analysis.riskLevel) }}>{"● " + reg.analysis.riskLevel + " · " + (reg.analysis.controls || []).length + " Controls"}</span>
+                            : <span style={{ color: C.warning }}>⚠ Failed</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
             </div>
-            <button onClick={syncNow} disabled={syncing} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: "transparent", color: syncing ? C.muted : C.accent, opacity: syncing ? 0.6 : 1 }}>{syncing ? "Syncing..." : "↻ Sync Now"}</button>
-            <button onClick={toggleTheme} style={{ fontSize: 18, padding: "5px 10px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: C.panel2, color: C.text, lineHeight: 1 }} title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}>{theme === "dark" ? "☀️" : "🌙"}</button>
-            <button onClick={() => { const v = !isAdmin; setIsAdmin(v); storage.set("delphi_admin", v); }} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${isAdmin ? C.redBorder : C.border}`, background: isAdmin ? C.redBg : "transparent", color: isAdmin ? C.red : C.muted }}>{isAdmin ? "Admin Mode ON" : "Admin Mode"}</button>
           </div>
-          {view === "dashboard" && <Dashboard {...vp} />}
-          {view === "inventory" && <Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin} onAnalyzeClick={(id) => { setAnalyzeRegId(id); setView("analyze"); }} ingestedRegs={ingestedRegs} onUpdateIngested={updateIngestedReg} onClearChanges={clearChangesFlag} />}
-          {view === "analyze" && <Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={() => setAnalyzeRegId(null)} savedUrls={savedUrls} onSaveUrls={savePersistentUrls} ingestedRegs={ingestedRegs} onIngest={ingestRegulation} onUpdateIngested={updateIngestedReg} />}
-          {view === "controls" && <Controls {...vp} isAdmin={isAdmin} onDeleteControl={onDeleteControl} deletedControlIds={deletedControlIds} />}
-          {view === "timeline" && <Timeline {...vp} />}
-          {view === "calendar" && <Calendar {...vp} />}
         </div>
-      </main>
+      )}
+
+      {/* Mobile Bottom Nav */}
+      {IS_MOBILE && <div className="mobile-nav" style={{ display: "flex", position: "fixed", bottom: 0, left: 0, right: 0, background: C.panel, borderTop: "1px solid " + C.border, zIndex: 150, padding: "8px 0", paddingBottom: "max(8px, env(safe-area-inset-bottom))" }}>
+        {[
+          { icon: "☰", label: "Menu", action: function() { setShowMobileSidebar(true); } },
+          { icon: "⟳", label: "Scan", action: scanAllSources, disabled: scanning },
+          { icon: "📋", label: "List", action: function() { setMobileView("home"); setSelected(null); } },
+          { icon: "⚙", label: "Sources", action: function() { setShowSources(true); } },
+        ].map(function(item, i) {
+          return (
+            <button key={i} onClick={item.disabled ? undefined : item.action}
+              style={{ flex: 1, background: "transparent", border: "none", color: item.disabled ? C.muted : C.muted, cursor: item.disabled ? "default" : "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 0", opacity: item.disabled ? 0.4 : 1 }}>
+              <span style={{ fontSize: 18 }}>{item.icon}</span>
+              <span style={{ fontSize: 9, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted }}>{item.label}</span>
+            </button>
+          );
+        })}
+      </div>}
+
+      {IS_MOBILE && <div style={{ height: 72 }} />}
     </div>
   );
 }
