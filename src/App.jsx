@@ -1741,12 +1741,7 @@ export default function App() {
   };
   const [authed, setAuthed] = useState(() => storage.get(SESSION_KEY, false));
 
-  // Signal to index.html that React has mounted - removes the pre-load splash
-  useEffect(() => {
-    if (typeof window.__delphiReady === "function") {
-      window.__delphiReady();
-    }
-  }, []);
+  // React mounted
   const [view, setView] = useState("dashboard");
   const [scopeMap, setScopeMap] = useState(() => storage.get(SCOPE_KEY, {}));
   const [analysisMap, setAnalysisMap] = useState(() => storage.get(ANALYSIS_KEY, {}));
@@ -1849,8 +1844,9 @@ export default function App() {
     if (localUrls.length > 0) setSavedUrls(localUrls);
     if (localIngested.length > 0) setIngestedRegs(localIngested);
 
-    // Step 2: Fetch remote immediately and migrate if needed
+    // Step 2: Fetch remote after a short delay so first render completes first
     const initialFetch = async () => {
+      await new Promise(r => setTimeout(r, 150)); // let first render paint
       try {
         const rec = await jbGet();
         applyRemoteData(rec);
@@ -1887,7 +1883,15 @@ export default function App() {
 
   const allRegs = useMemo(() => { const d = new Set(deletedIds); return REGULATIONS.filter(r => !d.has(r.id)); }, [deletedIds]);
   const inScopeCount = useMemo(() => Object.values(scopeMap).filter(v => v === "In Scope").length, [scopeMap]);
-  const login = () => { setAuthed(true); storage.set(SESSION_KEY, true); };
+  const login = () => {
+    storage.set(SESSION_KEY, true);
+    // Use requestAnimationFrame to ensure the DOM paints before state update
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setAuthed(true);
+      });
+    });
+  };
   const logout = () => { setAuthed(false); storage.set(SESSION_KEY, false); };
   const setScopeFor = useCallback((id, val) => { setScopeMap(prev => { const n = { ...prev, [id]: val }; jbSet("delphi_scope", n); storage.set(SCOPE_KEY, n); return n; }); }, []);
   const onAnalysisComplete = useCallback((id, data) => { setAnalysisMap(prev => { const n = { ...prev, [id]: data }; jbSet("delphi_analyses", n); storage.set(ANALYSIS_KEY, n); return n; }); }, []);
