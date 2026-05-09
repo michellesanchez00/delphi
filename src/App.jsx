@@ -1896,11 +1896,7 @@ export default function App() {
   const onDelete = useCallback((id) => { setDeletedIds(prev => { const n = [...prev, id]; storage.set("delphi_deleted", n); return n; }); }, []);
   const onDeleteControl = useCallback((id) => { setDeletedControlIds(prev => { const n = [...prev, id]; storage.set("delphi_deleted_controls", n); return n; }); }, []);
 
-  if (!authed) return <Login onLogin={login} theme={theme} toggleTheme={toggleTheme} />;
-  // App is authed - ensure bg is set immediately
-  const _appBg = theme === "light" ? "#f0f4f8" : "#070910";
-  document.documentElement.style.background = _appBg;
-  document.body.style.background = _appBg;
+  // Both Login and App are always mounted - CSS switches visibility instantly, no blank frame
 
   const allRegsWithIngested = useMemo(() => {
     // Merge ingested regs that don't already exist in master list
@@ -1911,8 +1907,14 @@ export default function App() {
   }, [allRegs, ingestedRegs]);
   const vp = { allRegs: allRegsWithIngested, scopeMap, analysisMap, theme };
   return (
-    <div className="appFadeIn" style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
       <style>{G}</style>
+      {/* Login screen - always mounted, shown/hidden via CSS */}
+      <div style={{ display: authed ? "none" : "block" }}>
+        <Login onLogin={login} theme={theme} toggleTheme={toggleTheme} />
+      </div>
+      {/* Main app - always mounted, shown/hidden via CSS */}
+      <div style={{ display: authed ? "block" : "none" }}>
       <Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount} />
       <main style={{ marginLeft: 248, minHeight: "100vh" }}>
         <div style={{ maxWidth: 1440, margin: "0 auto", padding: "28px 36px" }}>
@@ -1933,6 +1935,8 @@ export default function App() {
           {view === "calendar" && <Calendar {...vp} />}
         </div>
       </main>
+    </div>
+      </div>
     </div>
   );
 }
