@@ -92,13 +92,16 @@ const NAV = [
 const getGlobalStyles = (theme) => `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
+html{background:${theme === "light" ? "#f0f4f8" : "#070910"};}
 body{background:${theme === "light" ? "#f0f4f8" : "#070910"};color:${theme === "light" ? "#0f172a" : "#ffffff"};font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
+#root{background:${theme === "light" ? "#f0f4f8" : "#070910"};min-height:100vh;}
 input,select,button,textarea{font-family:inherit;font-size:14px;}
 ::-webkit-scrollbar{width:6px;height:6px;}
 ::-webkit-scrollbar-thumb{background:${theme === "light" ? "#cbd5e1" : "#1c2333"};border-radius:6px;}
 ::-webkit-scrollbar-track{background:transparent;}
 @keyframes spin{to{transform:rotate(360deg)}}.spin{animation:spin 0.8s linear infinite;}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}.fadeIn{animation:fadeIn 0.25s ease}
+@keyframes appFadeIn{from{opacity:0}to{opacity:1}}.appFadeIn{animation:appFadeIn 0.15s ease-out}
 table{border-collapse:collapse;width:100%;}
 tr:hover td{background:${theme === "light" ? "rgba(0,0,0,0.02)" : "rgba(255,255,255,0.015)"};}
 `;
@@ -1885,20 +1888,19 @@ export default function App() {
   const inScopeCount = useMemo(() => Object.values(scopeMap).filter(v => v === "In Scope").length, [scopeMap]);
   const login = () => {
     storage.set(SESSION_KEY, true);
-    // Use requestAnimationFrame to ensure the DOM paints before state update
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        setAuthed(true);
-      });
-    });
+    setAuthed(true);
   };
-  const logout = () => { setAuthed(false); storage.set(SESSION_KEY, false); };
+  const logout = () => { storage.set(SESSION_KEY, false); setAuthed(false); };
   const setScopeFor = useCallback((id, val) => { setScopeMap(prev => { const n = { ...prev, [id]: val }; jbSet("delphi_scope", n); storage.set(SCOPE_KEY, n); return n; }); }, []);
   const onAnalysisComplete = useCallback((id, data) => { setAnalysisMap(prev => { const n = { ...prev, [id]: data }; jbSet("delphi_analyses", n); storage.set(ANALYSIS_KEY, n); return n; }); }, []);
   const onDelete = useCallback((id) => { setDeletedIds(prev => { const n = [...prev, id]; storage.set("delphi_deleted", n); return n; }); }, []);
   const onDeleteControl = useCallback((id) => { setDeletedControlIds(prev => { const n = [...prev, id]; storage.set("delphi_deleted_controls", n); return n; }); }, []);
 
   if (!authed) return <Login onLogin={login} theme={theme} toggleTheme={toggleTheme} />;
+  // App is authed - ensure bg is set immediately
+  const _appBg = theme === "light" ? "#f0f4f8" : "#070910";
+  document.documentElement.style.background = _appBg;
+  document.body.style.background = _appBg;
 
   const allRegsWithIngested = useMemo(() => {
     // Merge ingested regs that don't already exist in master list
@@ -1909,7 +1911,7 @@ export default function App() {
   }, [allRegs, ingestedRegs]);
   const vp = { allRegs: allRegsWithIngested, scopeMap, analysisMap, theme };
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
+    <div className="appFadeIn" style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
       <style>{G}</style>
       <Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount} />
       <main style={{ marginLeft: 248, minHeight: "100vh" }}>
