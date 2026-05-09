@@ -1909,33 +1909,32 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
       <style>{G}</style>
-      {/* Login screen - always mounted, shown/hidden via CSS */}
+      {/* Login screen - always mounted, shown/hidden instantly via CSS - no blank frame */}
       <div style={{ display: authed ? "none" : "block" }}>
         <Login onLogin={login} theme={theme} toggleTheme={toggleTheme} />
       </div>
-      {/* Main app - always mounted, shown/hidden via CSS */}
+      {/* Main app - always mounted, shown/hidden instantly via CSS - no blank frame */}
       <div style={{ display: authed ? "block" : "none" }}>
-      <Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount} />
-      <main style={{ marginLeft: 248, minHeight: "100vh" }}>
-        <div style={{ maxWidth: 1440, margin: "0 auto", padding: "28px 36px" }}>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 22, alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.green, display: "inline-block", boxShadow: `0 0 6px ${C.green}` }} title="Auto-syncing every 15 seconds" />
-              {lastSync && <span style={{ fontSize: 12, color: C.muted }}>Synced {lastSync.toLocaleTimeString()}</span>}
+        <Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount} />
+        <main style={{ marginLeft: 248, minHeight: "100vh" }}>
+          <div style={{ maxWidth: 1440, margin: "0 auto", padding: "28px 36px" }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 22, alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.green, display: "inline-block", boxShadow: `0 0 6px ${C.green}` }} title="Auto-syncing every 15 seconds" />
+                {lastSync && <span style={{ fontSize: 12, color: C.muted }}>Synced {lastSync.toLocaleTimeString()}</span>}
+              </div>
+              <button onClick={syncNow} disabled={syncing} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: "transparent", color: syncing ? C.muted : C.accent, opacity: syncing ? 0.6 : 1 }}>{syncing ? "Syncing..." : "↻ Sync Now"}</button>
+              <button onClick={toggleTheme} style={{ fontSize: 18, padding: "5px 10px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: C.panel2, color: C.text, lineHeight: 1 }} title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}>{theme === "dark" ? "☀️" : "🌙"}</button>
+              <button onClick={() => { const v = !isAdmin; setIsAdmin(v); storage.set("delphi_admin", v); }} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${isAdmin ? C.redBorder : C.border}`, background: isAdmin ? C.redBg : "transparent", color: isAdmin ? C.red : C.muted }}>{isAdmin ? "Admin Mode ON" : "Admin Mode"}</button>
             </div>
-            <button onClick={syncNow} disabled={syncing} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: "transparent", color: syncing ? C.muted : C.accent, opacity: syncing ? 0.6 : 1 }}>{syncing ? "Syncing..." : "↻ Sync Now"}</button>
-            <button onClick={toggleTheme} style={{ fontSize: 18, padding: "5px 10px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: C.panel2, color: C.text, lineHeight: 1 }} title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}>{theme === "dark" ? "☀️" : "🌙"}</button>
-            <button onClick={() => { const v = !isAdmin; setIsAdmin(v); storage.set("delphi_admin", v); }} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${isAdmin ? C.redBorder : C.border}`, background: isAdmin ? C.redBg : "transparent", color: isAdmin ? C.red : C.muted }}>{isAdmin ? "Admin Mode ON" : "Admin Mode"}</button>
+            {view === "dashboard" && <Dashboard {...vp} />}
+            {view === "inventory" && <Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin} onAnalyzeClick={(id) => { setAnalyzeRegId(id); setView("analyze"); }} ingestedRegs={ingestedRegs} onUpdateIngested={updateIngestedReg} onClearChanges={clearChangesFlag} />}
+            {view === "analyze" && <Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={() => setAnalyzeRegId(null)} savedUrls={savedUrls} onSaveUrls={savePersistentUrls} ingestedRegs={ingestedRegs} onIngest={ingestRegulation} onUpdateIngested={updateIngestedReg} />}
+            {view === "controls" && <Controls {...vp} isAdmin={isAdmin} onDeleteControl={onDeleteControl} deletedControlIds={deletedControlIds} />}
+            {view === "timeline" && <Timeline {...vp} />}
+            {view === "calendar" && <Calendar {...vp} />}
           </div>
-          {view === "dashboard" && <Dashboard {...vp} />}
-          {view === "inventory" && <Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin} onAnalyzeClick={(id) => { setAnalyzeRegId(id); setView("analyze"); }} ingestedRegs={ingestedRegs} onUpdateIngested={updateIngestedReg} onClearChanges={clearChangesFlag} />}
-          {view === "analyze" && <Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={() => setAnalyzeRegId(null)} savedUrls={savedUrls} onSaveUrls={savePersistentUrls} ingestedRegs={ingestedRegs} onIngest={ingestRegulation} onUpdateIngested={updateIngestedReg} />}
-          {view === "controls" && <Controls {...vp} isAdmin={isAdmin} onDeleteControl={onDeleteControl} deletedControlIds={deletedControlIds} />}
-          {view === "timeline" && <Timeline {...vp} />}
-          {view === "calendar" && <Calendar {...vp} />}
-        </div>
-      </main>
-    </div>
+        </main>
       </div>
     </div>
   );
