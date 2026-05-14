@@ -839,7 +839,7 @@ Include ALL regulations found across all URLs. Deduplicate if the same regulatio
         if (parsed2?.regulations?.length > 0) {
           // Merge, deduplicate by reference
           const existing = new Set(allRegsFound.map(r => r.reference));
-          parsed2.regulations.forEach(r => { if (!existing.has(r.reference)) { allRegsFound.push(r); existing.add(r.reference); } });
+          (parsed2.regulations||[]).forEach(r => { if (!existing.has(r.reference)) { allRegsFound.push(r); existing.add(r.reference); } });
         }
       }
 
@@ -917,7 +917,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
         Object.keys(updated).forEach(uid => {
           const res = updated[uid];
           if (res?.regulations) {
-            updated[uid] = { ...res, regulations: res.regulations.map(r => {
+            updated[uid] = { ...res, regulations: (res.regulations||[]).map(r => {
               const rk = "URL:" + (r.reference || r.name).replace(/[^a-zA-Z0-9]/g, "_").substring(0, 40);
               return rk === regKey ? { ...r, _analyzed: true } : r;
             })};
@@ -1006,33 +1006,35 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
   
   // Check if a regulation already exists in the master inventory or ingested list
   const findDuplicate = useCallback((name, reference) => {
-    const nameLower = (name || "").toLowerCase().trim();
+    const nameLower = (name || "").toLowerCase().trim().substring(0, 40);
     const refLower = (reference || "").toLowerCase().trim();
+    if (!nameLower && !refLower) return null;
     return allRegs.find(r =>
-      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
-      (refLower && r.reference && r.reference.toLowerCase() === refLower)
-    ) || ingestedRegs?.find(r =>
-      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
-      (refLower && r.reference && r.reference.toLowerCase() === refLower)
+      (nameLower && (r.name||"").toLowerCase().includes(nameLower)) ||
+      (refLower && (r.reference||"").toLowerCase() === refLower)
+    ) || (ingestedRegs||[]).find(r =>
+      r && ((nameLower && (r.name||"").toLowerCase().includes(nameLower)) ||
+      (refLower && (r.reference||"").toLowerCase() === refLower))
     );
   }, [allRegs, ingestedRegs]);
 
   const [dupModal, setDupModal] = useState(null); // { reg, fileKey, onOverwrite, onView }
+  const [skipDupCheck, setSkipDupCheck] = useState(false);
   const analyze = async () => {
-    // Check for duplicates on file upload
-    if (activeTab === "file" && uploadedFile) {
-      const fname = uploadedFile.name.replace(/[^.]+$/, "").replace(/\.$/, "");
+    // Check for duplicates on file upload (skip if re-analyzing)
+    if (activeTab === "file" && uploadedFile && !skipDupCheck) {
+      const fname = uploadedFile.name.replace(/\.[^.]+$/, "");
       const dup = findDuplicate(fname, "");
       if (dup) {
         setDupModal({
           existing: dup,
-          onOverwrite: () => { setDupModal(null); },
+          onOverwrite: () => { setDupModal(null); setSkipDupCheck(true); setTimeout(() => { setSkipDupCheck(false); }, 500); },
           onView: () => { setDupModal(null); if (analysisMap[dup.id]) { setResult(analysisMap[dup.id]); setTabResults(prev => ({...prev, file: analysisMap[dup.id]})); } }
         });
-        // Still allow overwrite to proceed - user will re-click Analyze
         return;
       }
     }
+    if (skipDupCheck) setSkipDupCheck(false);
     setLoading(true); setError(""); setResult(null);
     try {
       let messages;
@@ -1297,12 +1299,16 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
               })()}
               <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
                 {existingAnalysis ? (
-                  <button onClick={() => { setResult(existingAnalysis); setViewingFileResult(uploadedFile?.name); }}
+                  <button onClick={() => {
+                    setTabResults(prev => ({...prev, file: existingAnalysis}));
+                    setResult(existingAnalysis);
+                    setViewingFileResult(uploadedFile?.name);
+                  }}
                     style={{ display: "flex", alignItems: "center", gap: 8, background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, color: C.indigo, fontWeight: 700, padding: "11px 24px", borderRadius: 9, fontSize: 14, cursor: "pointer" }}>
                     👁 View Analysis
                   </button>
                 ) : null}
-                <button onClick={analyze} disabled={!uploadedFile || loading}
+                <button onClick={() => { setSkipDupCheck(!!existingAnalysis); setResult(null); setTabResults(prev => ({...prev, file: null})); analyze(); }} disabled={!uploadedFile || loading}
                   style={{ display: "flex", alignItems: "center", gap: 8, background: C.accent, border: "none", color: "#fff", fontWeight: 700, padding: "11px 24px", borderRadius: 9, fontSize: 15, cursor: uploadedFile && !loading ? "pointer" : "not-allowed", opacity: !uploadedFile || loading ? 0.5 : 1 }}>
                   {loading ? <><span className="spin" style={{ display: "inline-block", width: 14, height: 14, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%" }} />Analyzing...</> : existingAnalysis ? "↻ Re-analyze" : "⚡ Analyze Document"}
                 </button>
@@ -1445,7 +1451,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                             {u.lastScanned && <span style={{ fontSize: 11, color: C.muted }}>· Scanned {new Date(u.lastScanned).toLocaleDateString()}</span>}
                             {u.scanResult?.regulations?.length > 0 && <span style={{ fontSize: 12, color: C.green, fontWeight: 600 }}>· {u.scanResult.regulations.length} regulations found</span>}
                             {u.scanResult?.regulations?.filter(r => ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase())).length > 0 && (
-                              <span style={{ fontSize: 11, color: C.indigo }}>· {u.scanResult.regulations.filter(r => ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase())).length} ingested</span>
+                              <span style={{ fontSize: 11, color: C.indigo }}>· {(u.scanResult.regulations||[]).filter(r => ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase())).length} ingested</span>
                             )}
                           </div>
                         </>
@@ -1482,7 +1488,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                               {res.regulations?.length > 0 && (
                                 <button onClick={(e) => {
                                   e.stopPropagation();
-                                  res.regulations.forEach(r => onIngest && onIngest(r, u.url, u.title || u.url));
+                                  (res.regulations||[]).forEach(r => onIngest && onIngest(r, u.url, u.title || u.url));
                                 }} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.greenBorder}`, background: C.greenBg, color: C.green, cursor: "pointer", whiteSpace: "nowrap" }}>
                                   ↓ Ingest All
                                 </button>
@@ -1526,11 +1532,11 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                                         )}
                                         {regAnalysis ? (
                                           <button onClick={() => {
-                                            // Navigate to analyze tab with this result shown
-                                            setActiveTab("regulation");
+                                            // Store result in tabResults BEFORE switching tab
+                                            setTabResults(prev => ({...prev, regulation: regAnalysis}));
                                             setResult(regAnalysis);
-                                            setSelected("");
                                             setViewingFileResult(r.name);
+                                            setActiveTab("regulation");
                                           }} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, cursor: "pointer", whiteSpace: "nowrap" }}>👁 View Analysis</button>
                                         ) : (
                                           <button onClick={() => {
@@ -1565,7 +1571,35 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
           {viewingFileResult && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 16px", background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, borderRadius: 10 }}>
               <span style={{ fontSize: 13, color: C.indigo, fontWeight: 600 }}>Analysis: {viewingFileResult}</span>
-              <button onClick={() => { setResult(null); setViewingFileResult(null); }} style={{ marginLeft: "auto", fontSize: 12, color: C.muted, background: "transparent", border: "none", cursor: "pointer" }}>✕ Close</button>
+              <button onClick={() => { setResult(null); setViewingFileResult(null); setTabResults(prev => ({...prev, [activeTab]: null})); }} style={{ marginLeft: "auto", fontSize: 12, color: C.muted, background: "transparent", border: "none", cursor: "pointer" }}>✕ Close</button>
+            </div>
+          )}
+          {/* Marsh Entity Scope */}
+          {(result.marshScope||[]).length > 0 && (
+            <div style={{ ...card, border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 6 }}>◈ Marsh Entity Scope</div>
+              <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>AI-assessed entity scope. Always validate with legal counsel.</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.green, fontWeight: 700, marginBottom: 8 }}>● In Scope ({result.marshScope.filter(e => e.inScope).length})</div>
+                  {result.marshScope.filter(e => e.inScope).map((e, i) => (
+                    <div key={i} style={{ background: C.greenBg, border: `1px solid ${C.greenBorder}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: "9px 12px", marginBottom: 6 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{e.entity}</div>
+                      {e.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{e.reason}</div>}
+                    </div>
+                  ))}
+                  {result.marshScope.filter(e => e.inScope).length === 0 && <div style={{ fontSize: 13, color: C.muted, fontStyle: "italic" }}>None in scope</div>}
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, fontWeight: 700, marginBottom: 8 }}>○ Out of Scope ({result.marshScope.filter(e => !e.inScope).length})</div>
+                  {result.marshScope.filter(e => !e.inScope).map((e, i) => (
+                    <div key={i} style={{ background: C.panel2, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", marginBottom: 6, opacity: 0.7 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.muted }}>{e.entity}</div>
+                      {e.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{e.reason}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
           <div style={{ ...card, borderLeft: `3px solid ${riskColor(result.businessRisk)}` }}>
@@ -1955,10 +1989,11 @@ export default function App() {
   // Both Login and App are always mounted - CSS switches visibility instantly, no blank frame
 
   const allRegsWithIngested = useMemo(() => {
-    // Merge ingested regs that don't already exist in master list
     const masterIds = new Set(allRegs.map(r => r.id));
-    const masterNames = new Set(allRegs.map(r => r.name.toLowerCase()));
-    const newOnes = ingestedRegs.filter(r => !masterIds.has(r.id) && !masterNames.has(r.name.toLowerCase()));
+    const masterNames = new Set(allRegs.map(r => (r.name||"").toLowerCase()));
+    const newOnes = (ingestedRegs||[]).filter(r => 
+      r && r.name && !masterIds.has(r.id) && !masterNames.has((r.name||"").toLowerCase())
+    );
     return [...allRegs, ...newOnes];
   }, [allRegs, ingestedRegs]);
   const vp = { allRegs: allRegsWithIngested, scopeMap, analysisMap, theme };
