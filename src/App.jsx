@@ -653,7 +653,9 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
                   </div></td>
                   <td style={td}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                      <button onClick={() => onAnalyzeClick(r.id)} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 7, border: `1px solid ${analysisMap[r.id] ? C.indigoBorder : C.border}`, background: analysisMap[r.id] ? C.indigoBg : "transparent", color: analysisMap[r.id] ? C.indigo : C.muted, cursor: "pointer", whiteSpace: "nowrap" }}>⚡ {analysisMap[r.id] ? "View Analysis" : "Analyze"}</button>
+                      <button onClick={() => onAnalyzeClick(r.id)} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 7, border: `1px solid ${analyzingIds?.has(r.id) ? C.amberBorder : analysisMap[r.id] ? C.indigoBorder : C.border}`, background: analyzingIds?.has(r.id) ? C.amberBg : analysisMap[r.id] ? C.indigoBg : "transparent", color: analyzingIds?.has(r.id) ? C.amber : analysisMap[r.id] ? C.indigo : C.muted, cursor: "pointer", whiteSpace: "nowrap" }}>
+                        {analyzingIds?.has(r.id) ? <><span className="spin" style={{ display: "inline-block", width: 10, height: 10, border: `2px solid ${C.amber}`, borderTopColor: "transparent", borderRadius: "50%" }} />Analyzing...</> : <>⚡ {analysisMap[r.id] ? "View Analysis" : "Analyze"}</>}
+                      </button>
                       {r.hasChanges && analysisMap[r.id] && (
                         <button onClick={() => { if (onClearChanges) onClearChanges(r.id); onAnalyzeClick(r.id); }} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.amberBorder}`, background: C.amberBg, color: C.amber, cursor: "pointer", whiteSpace: "nowrap" }}>↻ Re-analyze</button>
                       )}
@@ -702,12 +704,12 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
   );
 }
 
-function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComplete, initialRegId, onAnalyzeDone, savedUrls: externalUrls, onSaveUrls, ingestedRegs, onIngest, onUpdateIngested }) {
+function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComplete, initialRegId, onAnalyzeDone, savedUrls: externalUrls, onSaveUrls, ingestedRegs, onIngest, onUpdateIngested, analyzingIds, addAnalyzing, removeAnalyzing }) {
   const [selected, setSelected] = useState(initialRegId || "");
   const [searchQ, setSearchQ] = useState(""); const [showDropdown, setShowDropdown] = useState(false);
   const [loading, setLoading] = useState(false); const [error, setError] = useState("");
   const [result, setResult] = useState(null); // shared result for display
-  const [tabResults, setTabResults] = useState({ regulation: null, file: null }); // per-tab results
+  const [tabResults, setTabResults] = useState({ regulation: null, file: null, url: null, bulk: null }); // per-tab results
   // File upload state
   const [uploadedFile, setUploadedFile] = useState(null);
   const [fileContent, setFileContent] = useState("");
@@ -1035,6 +1037,8 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
       }
     }
     if (skipDupCheck) setSkipDupCheck(false);
+    const analyzeKey = selected || (uploadedFile ? "FILE:" + uploadedFile.name.replace(/[^a-zA-Z0-9]/g, "_") : "file");
+    if (addAnalyzing) addAnalyzing(analyzeKey);
     setLoading(true); setError(""); setResult(null);
     try {
       let messages;
@@ -1104,7 +1108,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
       setResult(parsed);
       setTabResults(prev => ({ ...prev, [activeTab]: parsed }));
     } catch (e) { setError(e.message || "Analysis failed"); }
-    finally { setLoading(false); }
+    finally { setLoading(false); if (removeAnalyzing) removeAnalyzing(analyzeKey); }
   };
 
 
@@ -1294,7 +1298,18 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                 </div>
               )}
               {uploadedFile && fileKey && (() => {
-                const fakeReg = { name: uploadedFile.name.replace(/\.[^.]+$/, ""), reference: "", region: "", domain: "", summary: "Uploaded document — run analysis to extract details.", marshEntities: [], deadline: null, status: existingAnalysis ? "Analyzed" : "Pending" };
+                // Try to match against existing regulation for richer data
+                const fileBaseName = uploadedFile.name.replace(/\.[^.]+$/, "");
+                const matchedReg = allRegs.find(r =>
+                  (r.name||"").toLowerCase().includes(fileBaseName.toLowerCase().substring(0, 25)) ||
+                  fileBaseName.toLowerCase().includes((r.name||"").toLowerCase().substring(0, 25))
+                );
+                const fakeReg = matchedReg || {
+                  name: fileBaseName, reference: "", region: "", domain: "",
+                  summary: "Uploaded document — run analysis to extract details.",
+                  marshEntities: existingAnalysis?.marshScope?.filter(e => e.inScope).map(e => e.entity) || [],
+                  deadline: null, status: existingAnalysis ? "Analyzed" : "Pending"
+                };
                 return <RegInfoPanel regData={fakeReg} regKey={fileKey} currentScope={fileScope} onScopeChg={onScopeChange} analysisResult={existingAnalysis} />;
               })()}
               <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
@@ -1532,11 +1547,15 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                                         )}
                                         {regAnalysis ? (
                                           <button onClick={() => {
-                                            // Store result in tabResults BEFORE switching tab
-                                            setTabResults(prev => ({...prev, regulation: regAnalysis}));
+                                            // Show analysis in URL tab directly - no tab switch
+                                            setTabResults(prev => ({...prev, url: regAnalysis}));
                                             setResult(regAnalysis);
                                             setViewingFileResult(r.name);
-                                            setActiveTab("regulation");
+                                            // Scroll result into view
+                                            setTimeout(() => {
+                                              const el = document.getElementById("analyze-result-panel");
+                                              if (el) el.scrollIntoView({ behavior: "smooth" });
+                                            }, 100);
                                           }} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, cursor: "pointer", whiteSpace: "nowrap" }}>👁 View Analysis</button>
                                         ) : (
                                           <button onClick={() => {
@@ -1567,7 +1586,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
 
       {/* Analysis Results */}
       {result && (
-        <div className="fadeIn">
+        <div className="fadeIn" id="analyze-result-panel">
           {viewingFileResult && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 16px", background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, borderRadius: 10 }}>
               <span style={{ fontSize: 13, color: C.indigo, fontWeight: 600 }}>Analysis: {viewingFileResult}</span>
@@ -1901,6 +1920,9 @@ export default function App() {
     });
   }, []);
   const [syncing, setSyncing] = useState(false);
+  const [analyzingIds, setAnalyzingIds] = useState(new Set()); // tracks which regs are being analyzed
+  const addAnalyzing = (id) => setAnalyzingIds(prev => new Set([...prev, id]));
+  const removeAnalyzing = (id) => setAnalyzingIds(prev => { const n = new Set(prev); n.delete(id); return n; });
   const [lastSync, setLastSync] = useState(null);
 
   // Apply remote data to state, only update if actually changed
@@ -1996,7 +2018,7 @@ export default function App() {
     );
     return [...allRegs, ...newOnes];
   }, [allRegs, ingestedRegs]);
-  const vp = { allRegs: allRegsWithIngested, scopeMap, analysisMap, theme };
+  const vp = { allRegs: allRegsWithIngested, scopeMap, analysisMap, theme, analyzingIds };
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
       <style>{G}</style>
@@ -2019,8 +2041,8 @@ export default function App() {
               <button onClick={() => { const v = !isAdmin; setIsAdmin(v); storage.set("delphi_admin", v); }} style={{ fontSize: 13, padding: "7px 16px", borderRadius: 8, cursor: "pointer", border: `1px solid ${isAdmin ? C.redBorder : C.border}`, background: isAdmin ? C.redBg : "transparent", color: isAdmin ? C.red : C.muted }}>{isAdmin ? "Admin Mode ON" : "Admin Mode"}</button>
             </div>
             {view === "dashboard" && <Dashboard {...vp} />}
-            {view === "inventory" && <Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin} onAnalyzeClick={(id) => { setAnalyzeRegId(id); setView("analyze"); }} ingestedRegs={ingestedRegs} onUpdateIngested={updateIngestedReg} onClearChanges={clearChangesFlag} />}
-            {view === "analyze" && <Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={() => setAnalyzeRegId(null)} savedUrls={savedUrls} onSaveUrls={savePersistentUrls} ingestedRegs={ingestedRegs} onIngest={ingestRegulation} onUpdateIngested={updateIngestedReg} />}
+            {view === "inventory" && <Inventory {...vp} onScopeChange={setScopeFor} onDelete={onDelete} isAdmin={isAdmin} onAnalyzeClick={(id) => { setAnalyzeRegId(id); setView("analyze"); }} ingestedRegs={ingestedRegs} onUpdateIngested={updateIngestedReg} onClearChanges={clearChangesFlag} analyzingIds={analyzingIds} />}
+            {view === "analyze" && <Analyze {...vp} onScopeChange={setScopeFor} onAnalysisComplete={onAnalysisComplete} initialRegId={analyzeRegId} onAnalyzeDone={() => setAnalyzeRegId(null)} savedUrls={savedUrls} onSaveUrls={savePersistentUrls} ingestedRegs={ingestedRegs} onIngest={ingestRegulation} onUpdateIngested={updateIngestedReg} addAnalyzing={addAnalyzing} removeAnalyzing={removeAnalyzing} />}
             {view === "controls" && <Controls {...vp} isAdmin={isAdmin} onDeleteControl={onDeleteControl} deletedControlIds={deletedControlIds} />}
             {view === "timeline" && <Timeline {...vp} />}
             {view === "calendar" && <Calendar {...vp} />}
