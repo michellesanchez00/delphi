@@ -263,7 +263,7 @@ function WorldHeatmap({ allRegs, scopeMap, theme }) {
 
   // Convert topojson to SVG path strings
   const svgPaths = useMemo(() => {
-    if (!geoData?.objects?.countries?.geometries || !geoData.arcs) return [];
+    if (!geoData?.objects?.countries?.geometries || !geoData.arcs || !geoData.transform) return [];
     const { scale: [kx, ky], translate: [tx, ty] } = geoData.transform;
     const W = 960, H = 500;
 
@@ -467,7 +467,7 @@ function TopControlsChart({ allRegs, scopeMap }) {
   const controlFreq = useMemo(() => {
     const counts = {};
     CONTROLS_LIBRARY.forEach(ctrl => {
-      const inScopeCount = ctrl.regulations.filter(rId => inScopeIds.has(rId)).length;
+      const inScopeCount = (ctrl.regulations || []).filter(rId => inScopeIds.has(rId)).length;
       if (inScopeCount > 0) counts[ctrl.title] = { count: inScopeCount, category: ctrl.category, id: ctrl.controlId };
     });
     return Object.entries(counts).sort((a,b) => b[1].count - a[1].count).slice(0, 12);
@@ -745,8 +745,8 @@ function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComp
   // When viewing a file/url result on regulation tab, show that result
   useEffect(() => {
     if (activeTab !== "regulation") setViewingFileResult(null);
-    setResult(tabResults[activeTab] || null);
-  }, [activeTab]);
+    setResult(prev => tabResults[activeTab] || null);
+  }, [activeTab, tabResults]);
   useEffect(() => { if (initialRegId) { setSelected(initialRegId); setActiveTab("regulation"); if (onAnalyzeDone) onAnalyzeDone(); } }, [initialRegId]);
   useEffect(() => { setResult(selected && analysisMap[selected] ? analysisMap[selected] : null); }, [selected, analysisMap]);
   const filteredRegs = useMemo(() => { if (!searchQ) return allRegs; const q = searchQ.toLowerCase(); return allRegs.filter(r => r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.id.toLowerCase().includes(q)); }, [allRegs, searchQ]);
@@ -1003,24 +1003,36 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
     setBulkRunning(false);
   };
 
-    const analyze = async () => {
+  
+  // Check if a regulation already exists in the master inventory or ingested list
+  const findDuplicate = useCallback((name, reference) => {
+    const nameLower = (name || "").toLowerCase().trim();
+    const refLower = (reference || "").toLowerCase().trim();
+    return allRegs.find(r =>
+      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
+      (refLower && r.reference && r.reference.toLowerCase() === refLower)
+    ) || ingestedRegs?.find(r =>
+      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
+      (refLower && r.reference && r.reference.toLowerCase() === refLower)
+    );
+  }, [allRegs, ingestedRegs]);
+
+  const [dupModal, setDupModal] = useState(null); // { reg, fileKey, onOverwrite, onView }
+  const analyze = async () => {
     // Check for duplicates on file upload
     if (activeTab === "file" && uploadedFile) {
-      const fname = uploadedFile.name.replace(/\.[^.]+$/, "");
+      const fname = uploadedFile.name.replace(/[^.]+$/, "").replace(/\.$/, "");
       const dup = findDuplicate(fname, "");
       if (dup) {
         setDupModal({
           existing: dup,
-          onOverwrite: () => { setDupModal(null); doAnalyze(); },
-          onView: () => { setDupModal(null); if (analysisMap[dup.id]) setResult(analysisMap[dup.id]); }
+          onOverwrite: () => { setDupModal(null); },
+          onView: () => { setDupModal(null); if (analysisMap[dup.id]) { setResult(analysisMap[dup.id]); setTabResults(prev => ({...prev, file: analysisMap[dup.id]})); } }
         });
+        // Still allow overwrite to proceed - user will re-click Analyze
         return;
       }
     }
-    doAnalyze();
-  };
-
-  const doAnalyze = async () => {
     setLoading(true); setError(""); setResult(null);
     try {
       let messages;
@@ -1088,7 +1100,6 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
         setFileResult(parsed);
       }
       setResult(parsed);
-      setTabResults(prev => ({ ...prev, [activeTab]: parsed }));
       setTabResults(prev => ({ ...prev, [activeTab]: parsed }));
     } catch (e) { setError(e.message || "Analysis failed"); }
     finally { setLoading(false); }
@@ -1172,20 +1183,6 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
   };
 
   
-  // Check if a regulation already exists in the master inventory or ingested list
-  const findDuplicate = useCallback((name, reference) => {
-    const nameLower = (name || "").toLowerCase().trim();
-    const refLower = (reference || "").toLowerCase().trim();
-    return allRegs.find(r =>
-      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
-      (refLower && r.reference && r.reference.toLowerCase() === refLower)
-    ) || ingestedRegs?.find(r =>
-      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
-      (refLower && r.reference && r.reference.toLowerCase() === refLower)
-    );
-  }, [allRegs, ingestedRegs]);
-
-  const [dupModal, setDupModal] = useState(null); // { reg, fileKey, onOverwrite, onView }
   const card = { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22, marginBottom: 16 };
   const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "11px 14px", fontSize: 14, outline: "none" };
   const marshScopeFromReg = reg ? MARSH_ENTITIES.map(e => ({ entity: e, inScope: (reg.marshEntities || []).includes(e) })) : [];
@@ -1634,7 +1631,7 @@ function Controls({ allRegs, scopeMap, isAdmin, onDeleteControl, deletedControlI
   // Deduplicate controls - show each control once even if mapped to multiple in-scope regs
   const controls = useMemo(() => {
     let l = CONTROLS_LIBRARY.filter(c => !(deletedControlIds || []).includes(c.controlId));
-    if (!showAll) l = l.filter(c => c.regulations.some(rId => inScopeIds.has(rId)));
+    if (!showAll) l = l.filter(c => (c.regulations || []).some(rId => inScopeIds.has(rId)));
     if (cat !== "All") l = l.filter(c => c.category === cat);
     if (search) { const q = search.toLowerCase(); l = l.filter(c => c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)); }
     // Deduplicate by controlId
@@ -1643,20 +1640,6 @@ function Controls({ allRegs, scopeMap, isAdmin, onDeleteControl, deletedControlI
   }, [inScopeIds, cat, search, showAll, deletedControlIds]);
 
 
-  // Check if a regulation already exists in the master inventory or ingested list
-  const findDuplicate = useCallback((name, reference) => {
-    const nameLower = (name || "").toLowerCase().trim();
-    const refLower = (reference || "").toLowerCase().trim();
-    return allRegs.find(r =>
-      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
-      (refLower && r.reference && r.reference.toLowerCase() === refLower)
-    ) || ingestedRegs?.find(r =>
-      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
-      (refLower && r.reference && r.reference.toLowerCase() === refLower)
-    );
-  }, [allRegs, ingestedRegs]);
-
-  const [dupModal, setDupModal] = useState(null); // { reg, fileKey, onOverwrite, onView }
   const card = { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22, marginBottom: 14 };
   const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "10px 14px", fontSize: 14, outline: "none" };
 
@@ -1681,7 +1664,7 @@ function Controls({ allRegs, scopeMap, isAdmin, onDeleteControl, deletedControlI
       )}
       {controls.map(ctrl => {
         const pc = { Immediate: C.red, "Short-term": C.amber, Ongoing: C.blue }[ctrl.priority] || C.blue;
-        const inScopeRegs = ctrl.regulations.filter(rId => inScopeIds.has(rId));
+        const inScopeRegs = (ctrl.regulations || []).filter(rId => inScopeIds.has(rId));
         return (
           <div key={ctrl.controlId} style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
