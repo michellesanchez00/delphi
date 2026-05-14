@@ -576,9 +576,25 @@ function Dashboard({ allRegs, scopeMap, analysisMap, theme }) {
 }
 
 function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, isAdmin, onAnalyzeClick, ingestedRegs, onUpdateIngested, onClearChanges, analyzingIds }) {
-  const [search, setSearch] = useState(""); const [domain, setDomain] = useState("All"); const [region, setRegion] = useState("All"); const [scope, setScope] = useState("All"); const [page, setPage] = useState(1); const [delConfirm, setDelConfirm] = useState(null); const PER = 20;
-  const [sortField, setSortField] = useState("name"); const [sortDir, setSortDir] = useState("asc");
-  const toggleSort = (field) => { if (sortField === field) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortField(field); setSortDir("asc"); } };
+  const ssGet = (k, d) => { try { const v = sessionStorage.getItem("inv_"+k); return v !== null ? JSON.parse(v) : d; } catch { return d; } };
+  const ssSet = (k, v) => { try { sessionStorage.setItem("inv_"+k, JSON.stringify(v)); } catch {} };
+  const [search, setSearch] = useState(() => ssGet("search", ""));
+  const [domain, setDomain] = useState(() => ssGet("domain", "All"));
+  const [region, setRegion] = useState(() => ssGet("region", "All"));
+  const [scope, setScope] = useState(() => ssGet("scope", "All"));
+  const [page, setPage] = useState(() => ssGet("page", 1));
+  const [delConfirm, setDelConfirm] = useState(null); const PER = 20;
+  const [sortField, setSortField] = useState(() => ssGet("sortField", "name"));
+  const [sortDir, setSortDir] = useState(() => ssGet("sortDir", "asc"));
+  const toggleSort = (field) => {
+    if (sortField === field) { const d = sortDir === "asc" ? "desc" : "asc"; setSortDir(d); ssSet("sortDir", d); }
+    else { setSortField(field); ssSet("sortField", field); setSortDir("asc"); ssSet("sortDir", "asc"); }
+  };
+  const setSearchP = (v) => { setSearch(v); ssSet("search", v); setPage(1); ssSet("page", 1); };
+  const setDomainP = (v) => { setDomain(v); ssSet("domain", v); setPage(1); ssSet("page", 1); };
+  const setRegionP = (v) => { setRegion(v); ssSet("region", v); setPage(1); ssSet("page", 1); };
+  const setScopeP = (v) => { setScope(v); ssSet("scope", v); setPage(1); ssSet("page", 1); };
+  const setPageP = (v) => { const p = typeof v === "function" ? v(page) : v; setPage(p); ssSet("page", p); };
   const [editingReg, setEditingReg] = useState(null); const [editFields, setEditFields] = useState({});
   const filtered = useMemo(() => { let list = [...allRegs].filter(r => r && r.id); if (search) { const q = search.toLowerCase(); list = list.filter(r => (r.name||"").toLowerCase().includes(q) || (r.reference||"").toLowerCase().includes(q) || (r.id||"").toLowerCase().includes(q) || (r.tags || []).some(t => (t||"").toLowerCase().includes(q))); } if (domain !== "All") list = list.filter(r => r.domain === domain); if (region !== "All") list = list.filter(r => r.region === region); if (scope !== "All") list = list.filter(r => (scopeMap[r.id] || "Pending") === scope); list.sort((a,b) => { let av = (a[sortField]||"").toString(); let bv = (b[sortField]||"").toString(); if (sortField==="deadline") { av=av||"9999"; bv=bv||"9999"; } return sortDir==="asc" ? av.localeCompare(bv) : bv.localeCompare(av); }); return list; }, [allRegs, search, domain, region, scope, scopeMap, sortField, sortDir]);
   const pages = Math.ceil(filtered.length / PER); const paged = filtered.slice((page - 1) * PER, page * PER);
@@ -596,10 +612,10 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
         {isAdmin && <Badge text="Admin Mode" style={{ bg: C.indigoBg, border: C.indigoBorder, color: C.indigo }} />}
       </div>
       <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
-        <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} placeholder="Search regulations, references, tags..." style={{ ...inp, flex: 1, minWidth: 200 }} />
-        <select value={domain} onChange={e => { setDomain(e.target.value); setPage(1); }} style={{ ...inp, cursor: "pointer" }}><option>All</option>{DOMAINS.map(d => <option key={d}>{d}</option>)}</select>
-        <select value={region} onChange={e => { setRegion(e.target.value); setPage(1); }} style={{ ...inp, cursor: "pointer" }}><option>All</option>{["EU", "US", "UK", "APAC", "Global", "Canada", "LATAM", "Middle East", "Africa"].map(r => <option key={r}>{r}</option>)}</select>
-        <select value={scope} onChange={e => { setScope(e.target.value); setPage(1); }} style={{ ...inp, cursor: "pointer" }}><option>All</option><option>In Scope</option><option>Out of Scope</option><option>Pending</option></select>
+        <input value={search} onChange={e => setSearchP(e.target.value)} placeholder="Search regulations, references, tags..." style={{ ...inp, flex: 1, minWidth: 200 }} />
+        <select value={domain} onChange={e => setDomainP(e.target.value)} style={{ ...inp, cursor: "pointer" }}><option>All</option>{DOMAINS.map(d => <option key={d}>{d}</option>)}</select>
+        <select value={region} onChange={e => setRegionP(e.target.value)} style={{ ...inp, cursor: "pointer" }}><option>All</option>{["EU", "US", "UK", "APAC", "Global", "Canada", "LATAM", "Middle East", "Africa"].map(r => <option key={r}>{r}</option>)}</select>
+        <select value={scope} onChange={e => setScopeP(e.target.value)} style={{ ...inp, cursor: "pointer" }}><option>All</option><option>In Scope</option><option>Out of Scope</option><option>Pending</option></select>
       </div>
       <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
@@ -695,8 +711,8 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
       {pages > 1 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>
           <span style={{ fontSize: 13, color: C.muted }}>Page {page} of {pages} — {filtered.length} results</span>
           <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} style={{ padding: "6px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, fontSize: 13, cursor: "pointer", opacity: page === 1 ? 0.4 : 1 }}>Prev</button>
-            <button onClick={() => setPage(p => Math.min(pages, p + 1))} disabled={page === pages} style={{ padding: "6px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, fontSize: 13, cursor: "pointer", opacity: page === pages ? 0.4 : 1 }}>Next</button>
+            <button onClick={() => setPageP(p => Math.max(1, p - 1))} disabled={page === 1} style={{ padding: "6px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, fontSize: 13, cursor: "pointer", opacity: page === 1 ? 0.4 : 1 }}>Prev</button>
+            <button onClick={() => setPageP(p => Math.min(pages, p + 1))} disabled={page === pages} style={{ padding: "6px 14px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, fontSize: 13, cursor: "pointer", opacity: page === pages ? 0.4 : 1 }}>Next</button>
           </div>
         </div>}
       </div>
@@ -1147,43 +1163,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
             </select>
           </div>
         </div>
-        {/* Marsh Entity Scope */}
-        <div style={{ background: C.panel2, borderRadius: 10, padding: 16, marginBottom: 14, border: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>◈ Marsh Entity Scope</div>
-          <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>Based on regulation's tagged entities. Run analysis for AI rationale.</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div>
-              <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.green, fontWeight: 700, marginBottom: 8 }}>
-                ● In Scope ({marshScope.filter(e => e.inScope).length})
-              </div>
-              {marshScope.filter(e => e.inScope).map(e => {
-                const ai = analysisResult?.marshScope?.find(x => x.entity === e.entity);
-                return (
-                  <div key={e.entity} style={{ background: C.greenBg, border: `1px solid ${C.greenBorder}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: "9px 12px", marginBottom: 6 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{e.entity}</div>
-                    {ai?.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{ai.reason}</div>}
-                  </div>
-                );
-              })}
-              {marshScope.filter(e => e.inScope).length === 0 && <div style={{ fontSize: 13, color: C.muted, fontStyle: "italic" }}>None tagged</div>}
-            </div>
-            <div>
-              <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, fontWeight: 700, marginBottom: 8 }}>
-                ○ Out of Scope ({marshScope.filter(e => !e.inScope).length})
-              </div>
-              {marshScope.filter(e => !e.inScope).map(e => {
-                const ai = analysisResult?.marshScope?.find(x => x.entity === e.entity);
-                return (
-                  <div key={e.entity} style={{ background: C.panel, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", marginBottom: 6, opacity: 0.65 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.muted }}>{e.entity}</div>
-                    {ai?.reason && <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{ai.reason}</div>}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 8, fontStyle: "italic" }}>Always validate with legal counsel.</div>
-        </div>
+
       </div>
     );
   };
