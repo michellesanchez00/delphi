@@ -21,7 +21,7 @@ const BROKER = ["Marsh (Parent)","Marsh Risk","Guy Carpenter / Marsh Re","McGrif
 const SECURITIES = ["Marsh Securities LLC","Marsh Securities Limited (UK)","Marsh Securities Ireland","Marsh MMA Securities LLC","Marsh MMA Asset Management LLC"];
 const INSURANCE = ["Marsh (Parent)","Marsh Risk","Victor Insurance","McGriff Insurance Services"];
 const EU_ENT = ["Marsh (Parent)","Marsh Risk","Guy Carpenter / Marsh Re","Mercer","Oliver Wyman","Marsh Securities Ireland","Marsh Securities Limited (UK)"];
-const US_ENT = ["Marsh (Parent)","Marsh Risk","Marsh Securities LLC","Marsh MMA Securities LLC","Marsh MMA Asset Management LLC","McGriff Insurance Services","Victor Insurance"];
+const US_ENT = ["Marsh (Parent)","Marsh Risk","Guy Carpenter / Marsh Re","Mercer","Oliver Wyman","Marsh Securities LLC","Marsh MMA Securities LLC","Marsh MMA Asset Management LLC","McGriff Insurance Services","Victor Insurance"];;
 const APAC_ENT = ["Marsh (Parent)","Marsh Risk","Mercer"];
 
 export const REGULATIONS = [
