@@ -883,8 +883,8 @@ Include ALL regulations found across all URLs. Deduplicate if the same regulatio
         summary: scannedReg.summary, effectiveDate: scannedReg.effectiveDate || "",
         deadline: scannedReg.deadline || "", marshEntities: [],
       };
-      const thisRegControls = CONTROLS_LIBRARY.filter(c => c.regulations.includes(selected));
-      const otherControls = CONTROLS_LIBRARY.filter(c => !c.regulations.includes(selected) && c.regulations.some(rId => inScopeIds.has(rId)));
+      const thisRegControls = CONTROLS_LIBRARY.filter(c => (c.regulations||[]).includes(selected));
+      const otherControls = CONTROLS_LIBRARY.filter(c => !(c.regulations||[]).includes(selected) && (c.regulations||[]).some(rId => inScopeIds.has(rId)));
       const prompt = `You are a regulatory compliance expert. Respond with ONLY a valid JSON object - no markdown, no backticks, no text outside JSON. No newlines inside string values.
 
 Regulation: ${fakeReg.name} (${fakeReg.reference}) | ${fakeReg.region} | ${fakeReg.domain}
@@ -939,13 +939,13 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
   };
 
   const buildPrompt = (regData, summaryOverride) => {
-    const thisRegControls = CONTROLS_LIBRARY.filter(c => c.regulations.includes(selected));
-    const otherControls = CONTROLS_LIBRARY.filter(c => !c.regulations.includes(selected) && c.regulations.some(rId => inScopeIds.has(rId)));
+    const thisRegControls = CONTROLS_LIBRARY.filter(c => (c.regulations||[]).includes(selected));
+    const otherControls = CONTROLS_LIBRARY.filter(c => !(c.regulations||[]).includes(selected) && (c.regulations||[]).some(rId => inScopeIds.has(rId)));
     return `You are a regulatory compliance expert. Respond with ONLY a valid JSON object - no markdown, no backticks, no text outside JSON. No newlines inside string values.
 
 Regulation: ${regData.name} | ${regData.region || "Unknown"} | ${regData.domain || "Unknown"}
 Summary: ${summaryOverride || regData.summary || "See uploaded content"}
-Marsh entities in scope: ${(regData.marshEntities || []).join(", ") || "Unknown - assess based on regulation content"}
+Marsh entities in scope: ${(regData?.marshEntities || []).join(", ") || "Unknown - assess based on regulation content"}
 
 Controls ALREADY MAPPED to this regulation: ${thisRegControls.map(c => c.title).join(", ") || "None"}
 Controls from other in-scope regulations: ${otherControls.map(c => c.title).join(", ") || "None"}
@@ -967,8 +967,8 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
       if (!reg) continue;
       setBulkProgress(p => ({ ...p, current: reg.name, done: i }));
       try {
-        const thisRegControls = CONTROLS_LIBRARY.filter(c => c.regulations.includes(regId));
-        const otherControls = CONTROLS_LIBRARY.filter(c => !c.regulations.includes(regId) && c.regulations.some(rId => inScopeIds.has(rId)));
+        const thisRegControls = CONTROLS_LIBRARY.filter(c => (c.regulations||[]).includes(regId));
+        const otherControls = CONTROLS_LIBRARY.filter(c => !(c.regulations||[]).includes(regId) && (c.regulations||[]).some(rId => inScopeIds.has(rId)));
         const prompt = `You are a regulatory compliance expert. Respond with ONLY a valid JSON object - no markdown, no backticks, no text outside JSON. No newlines inside string values.
 
 Regulation: ${reg.name} (${reg.reference}) | ${reg.region} | ${reg.domain} | Effective: ${reg.effectiveDate} | Deadline: ${reg.deadline||"N/A"}
@@ -1109,7 +1109,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
   // Shared regulation info + marsh scope panel
   const RegInfoPanel = ({ regData, regKey, currentScope, onScopeChg, analysisResult }) => {
     if (!regData) return null;
-    const marshScope = MARSH_ENTITIES.map(e => ({ entity: e, inScope: (regData.marshEntities || []).includes(e) }));
+    const marshScope = MARSH_ENTITIES.map(e => ({ entity: e, inScope: (regData?.marshEntities || []).includes(e) }));
     const days = daysUntil(regData.deadline);
     return (
       <div>
@@ -1185,7 +1185,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
   
   const card = { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22, marginBottom: 16 };
   const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "11px 14px", fontSize: 14, outline: "none" };
-  const marshScopeFromReg = reg ? MARSH_ENTITIES.map(e => ({ entity: e, inScope: (reg.marshEntities || []).includes(e) })) : [];
+  const marshScopeFromReg = reg ? MARSH_ENTITIES.map(e => ({ entity: e, inScope: (reg?.marshEntities || []).includes(e) })) : [];
   const canAnalyze = (activeTab === "regulation" && selected) || (activeTab === "file" && uploadedFile);
 
   const TabBtn = ({ id, label, icon }) => (
@@ -1686,7 +1686,7 @@ function Controls({ allRegs, scopeMap, isAdmin, onDeleteControl, deletedControlI
             <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}><span style={{ color: C.text, fontWeight: 600 }}>Testing:</span> {ctrl.testingCriteria}</div>
             <div style={{ fontSize: 12, color: C.muted, fontWeight: 700, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Required by:</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {ctrl.regulations.map(rId => {
+              {(ctrl.regulations||[]).map(rId => {
                 const iS = inScopeIds.has(rId);
                 const nm = allRegs.find(r => r.id === rId)?.name || rId;
                 return (<span key={rId} style={{ fontSize: 12, padding: "3px 10px", borderRadius: 14, border: `1px solid ${iS ? C.greenBorder : C.border}`, background: iS ? C.greenBg : "transparent", color: iS ? C.green : C.muted }}>{rId}{iS ? " ✓" : ""} — {nm.substring(0, 28)}</span>);
