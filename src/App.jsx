@@ -575,12 +575,12 @@ function Dashboard({ allRegs, scopeMap, analysisMap, theme }) {
   );
 }
 
-function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, isAdmin, onAnalyzeClick, ingestedRegs, onUpdateIngested, onClearChanges }) {
+function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, isAdmin, onAnalyzeClick, ingestedRegs, onUpdateIngested, onClearChanges, analyzingIds }) {
   const [search, setSearch] = useState(""); const [domain, setDomain] = useState("All"); const [region, setRegion] = useState("All"); const [scope, setScope] = useState("All"); const [page, setPage] = useState(1); const [delConfirm, setDelConfirm] = useState(null); const PER = 20;
   const [sortField, setSortField] = useState("name"); const [sortDir, setSortDir] = useState("asc");
   const toggleSort = (field) => { if (sortField === field) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortField(field); setSortDir("asc"); } };
   const [editingReg, setEditingReg] = useState(null); const [editFields, setEditFields] = useState({});
-  const filtered = useMemo(() => { let list = [...allRegs]; if (search) { const q = search.toLowerCase(); list = list.filter(r => r.name.toLowerCase().includes(q) || r.reference.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || (r.tags || []).some(t => t.toLowerCase().includes(q))); } if (domain !== "All") list = list.filter(r => r.domain === domain); if (region !== "All") list = list.filter(r => r.region === region); if (scope !== "All") list = list.filter(r => (scopeMap[r.id] || "Pending") === scope); list.sort((a,b) => { let av = a[sortField]||""; let bv = b[sortField]||""; if (sortField==="deadline") { av=av||"9999"; bv=bv||"9999"; } return sortDir==="asc" ? av.localeCompare(bv) : bv.localeCompare(av); }); return list; }, [allRegs, search, domain, region, scope, scopeMap, sortField, sortDir]);
+  const filtered = useMemo(() => { let list = [...allRegs].filter(r => r && r.id); if (search) { const q = search.toLowerCase(); list = list.filter(r => (r.name||"").toLowerCase().includes(q) || (r.reference||"").toLowerCase().includes(q) || (r.id||"").toLowerCase().includes(q) || (r.tags || []).some(t => (t||"").toLowerCase().includes(q))); } if (domain !== "All") list = list.filter(r => r.domain === domain); if (region !== "All") list = list.filter(r => r.region === region); if (scope !== "All") list = list.filter(r => (scopeMap[r.id] || "Pending") === scope); list.sort((a,b) => { let av = (a[sortField]||"").toString(); let bv = (b[sortField]||"").toString(); if (sortField==="deadline") { av=av||"9999"; bv=bv||"9999"; } return sortDir==="asc" ? av.localeCompare(bv) : bv.localeCompare(av); }); return list; }, [allRegs, search, domain, region, scope, scopeMap, sortField, sortDir]);
   const pages = Math.ceil(filtered.length / PER); const paged = filtered.slice((page - 1) * PER, page * PER);
   const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "10px 14px", fontSize: 14, outline: "none" };
   const th = { padding: "13px 14px", fontSize: 12, fontWeight: 700, color: C.muted, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: "0.05em" };
@@ -626,13 +626,13 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <div style={{ fontWeight: 600, color: C.text, fontSize: 14, maxWidth: 300 }}>{r.name}</div>
+                          <div style={{ fontWeight: 600, color: C.text, fontSize: 14, maxWidth: 300 }}>{r.name || r.id}</div>
                           {r.isIngested && <span style={{ fontSize: 10, color: C.indigo, background: C.indigoBg, border: `1px solid ${C.indigoBorder}`, borderRadius: 4, padding: "1px 6px", flexShrink: 0 }}>ingested</span>}
                           {r.hasChanges && (
                             <span title="Changes detected — re-analysis recommended" style={{ fontSize: 10, color: C.amber, background: C.amberBg, border: `1px solid ${C.amberBorder}`, borderRadius: 4, padding: "1px 6px", flexShrink: 0, cursor: "default" }}>⚠ updated</span>
                           )}
                         </div>
-                        <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference}</div>
+                        <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{r.reference || ""}</div>
                         {r.isIngested && r.sourceTitle && (
                           <div style={{ fontSize: 11, color: C.indigo, marginTop: 2 }}>↗ {r.sourceTitle}</div>
                         )}
