@@ -139,14 +139,15 @@ function Login({ onLogin, theme, toggleTheme }) {
   );
 }
 
-function Sidebar({ active, onNav, onLogout, totalRegs, inScope }) {
+function Sidebar({ active, onNav, onLogout, totalRegs, inScope, collapsed, onToggle }) {
   return (
-    <div style={{ position: "fixed", inset: "0 auto 0 0", width: 248, background: C.panel, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column", zIndex: 40, overflowY: "auto" }}>
-      <div style={{ padding: "24px 20px 20px", borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
-        <div style={{ fontSize: 22, fontWeight: 900, color: C.text, letterSpacing: -0.5 }}>
-          <span style={{ color: C.accent }}>D</span>ELPHI
-        </div>
-        <div style={{ fontSize: 11, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>Document Extraction for Legal/<br/>Policy Harmonization &amp; Implementation</div>
+    <div style={{ position: "fixed", inset: "0 auto 0 0", width: collapsed ? 56 : 220, background: C.panel, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column", zIndex: 40, overflowY: "auto", transition: "width 0.2s ease" }}>
+      <div style={{ padding: collapsed ? "16px 0" : "20px 16px 16px", borderBottom: `1px solid ${C.border}`, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: collapsed ? "center" : "space-between" }}>
+        {!collapsed && <div>
+          <div style={{ fontSize: 20, fontWeight: 900, color: C.text, letterSpacing: -0.5 }}><span style={{ color: C.accent }}>D</span>ELPHI</div>
+          <div style={{ fontSize: 10, color: C.muted, marginTop: 3, lineHeight: 1.4 }}>Regulatory Intelligence</div>
+        </div>}
+        <button onClick={onToggle} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 7, color: C.muted, cursor: "pointer", padding: "4px 7px", fontSize: 14, flexShrink: 0 }} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>{collapsed ? "▶" : "◀"}</button>
       </div>
       <nav style={{ flex: 1, padding: "14px 10px" }}>
         {NAV.map(n => (
@@ -157,13 +158,11 @@ function Sidebar({ active, onNav, onLogout, totalRegs, inScope }) {
         ))}
       </nav>
       <div style={{ padding: "14px 18px", borderTop: `1px solid ${C.border}`, flexShrink: 0 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 13, color: C.muted }}>
-          <span>Regulations</span><span style={{ color: C.text, fontWeight: 600 }}>{totalRegs}</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14, fontSize: 13, color: C.muted }}>
-          <span>In Scope</span><span style={{ color: C.green, fontWeight: 600 }}>{inScope}</span>
-        </div>
-        <button onClick={onLogout} style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 13, cursor: "pointer" }}>Sign out</button>
+        {!collapsed && <>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12, color: C.muted }}><span>Regs</span><span style={{ color: C.text, fontWeight: 600 }}>{totalRegs}</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, fontSize: 12, color: C.muted }}><span>In Scope</span><span style={{ color: C.green, fontWeight: 600 }}>{inScope}</span></div>
+        </>}
+        <button onClick={onLogout} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: collapsed ? 0 : 8, padding: "8px", borderRadius: 8, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: collapsed ? 16 : 13, cursor: "pointer" }} title="Sign out">{collapsed ? "⏏" : "Sign out"}</button>
       </div>
     </div>
   );
@@ -706,7 +705,9 @@ function Inventory({ allRegs, scopeMap, onScopeChange, analysisMap, onDelete, is
 function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComplete, initialRegId, onAnalyzeDone, savedUrls: externalUrls, onSaveUrls, ingestedRegs, onIngest, onUpdateIngested }) {
   const [selected, setSelected] = useState(initialRegId || "");
   const [searchQ, setSearchQ] = useState(""); const [showDropdown, setShowDropdown] = useState(false);
-  const [loading, setLoading] = useState(false); const [error, setError] = useState(""); const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false); const [error, setError] = useState("");
+  const [result, setResult] = useState(null); // shared result for display
+  const [tabResults, setTabResults] = useState({ regulation: null, file: null }); // per-tab results
   // File upload state
   const [uploadedFile, setUploadedFile] = useState(null);
   const [fileContent, setFileContent] = useState("");
@@ -744,6 +745,7 @@ function Analyze({ allRegs, scopeMap, onScopeChange, analysisMap, onAnalysisComp
   // When viewing a file/url result on regulation tab, show that result
   useEffect(() => {
     if (activeTab !== "regulation") setViewingFileResult(null);
+    setResult(tabResults[activeTab] || null);
   }, [activeTab]);
   useEffect(() => { if (initialRegId) { setSelected(initialRegId); setActiveTab("regulation"); if (onAnalyzeDone) onAnalyzeDone(); } }, [initialRegId]);
   useEffect(() => { setResult(selected && analysisMap[selected] ? analysisMap[selected] : null); }, [selected, analysisMap]);
@@ -1002,6 +1004,23 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
   };
 
     const analyze = async () => {
+    // Check for duplicates on file upload
+    if (activeTab === "file" && uploadedFile) {
+      const fname = uploadedFile.name.replace(/\.[^.]+$/, "");
+      const dup = findDuplicate(fname, "");
+      if (dup) {
+        setDupModal({
+          existing: dup,
+          onOverwrite: () => { setDupModal(null); doAnalyze(); },
+          onView: () => { setDupModal(null); if (analysisMap[dup.id]) setResult(analysisMap[dup.id]); }
+        });
+        return;
+      }
+    }
+    doAnalyze();
+  };
+
+  const doAnalyze = async () => {
     setLoading(true); setError(""); setResult(null);
     try {
       let messages;
@@ -1064,12 +1083,13 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
       }
       if (selected) onAnalysisComplete(selected, parsed);
       else if (activeTab === "file" && uploadedFile) {
-        // Store file analysis keyed by a stable file key
         const fileKey = "FILE:" + uploadedFile.name.replace(/[^a-zA-Z0-9]/g, "_");
         onAnalysisComplete(fileKey, parsed);
         setFileResult(parsed);
       }
       setResult(parsed);
+      setTabResults(prev => ({ ...prev, [activeTab]: parsed }));
+      setTabResults(prev => ({ ...prev, [activeTab]: parsed }));
     } catch (e) { setError(e.message || "Analysis failed"); }
     finally { setLoading(false); }
   };
@@ -1151,7 +1171,22 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
     );
   };
 
-    const card = { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22, marginBottom: 16 };
+  
+  // Check if a regulation already exists in the master inventory or ingested list
+  const findDuplicate = useCallback((name, reference) => {
+    const nameLower = (name || "").toLowerCase().trim();
+    const refLower = (reference || "").toLowerCase().trim();
+    return allRegs.find(r =>
+      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
+      (refLower && r.reference && r.reference.toLowerCase() === refLower)
+    ) || ingestedRegs?.find(r =>
+      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
+      (refLower && r.reference && r.reference.toLowerCase() === refLower)
+    );
+  }, [allRegs, ingestedRegs]);
+
+  const [dupModal, setDupModal] = useState(null); // { reg, fileKey, onOverwrite, onView }
+  const card = { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22, marginBottom: 16 };
   const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "11px 14px", fontSize: 14, outline: "none" };
   const marshScopeFromReg = reg ? MARSH_ENTITIES.map(e => ({ entity: e, inScope: (reg.marshEntities || []).includes(e) })) : [];
   const canAnalyze = (activeTab === "regulation" && selected) || (activeTab === "file" && uploadedFile);
@@ -1199,6 +1234,27 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
             {loading ? <><span className="spin" style={{ display: "inline-block", width: 14, height: 14, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%" }} />Analyzing...</> : "⚡ Run Analysis"}
           </button>
           {error && <div style={{ marginTop: 12, background: C.redBg, border: `1px solid ${C.redBorder}`, color: C.red, borderRadius: 9, padding: 14, fontSize: 14 }}>{error}</div>}
+
+      {/* Duplicate regulation modal */}
+      {dupModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setDupModal(null)}>
+          <div style={{ background: C.panel, border: `1px solid ${C.amberBorder}`, borderRadius: 16, padding: 28, width: 480, maxWidth: "90vw" }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: C.amber, marginBottom: 8 }}>⚠ Regulation Already Exists</div>
+            <div style={{ fontSize: 14, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              This regulation already exists in the inventory as:<br/>
+              <span style={{ color: C.text, fontWeight: 600 }}>{dupModal.existing?.name}</span>
+              {dupModal.existing?.reference && <span style={{ color: C.muted }}> ({dupModal.existing.reference})</span>}
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {dupModal.onView && analysisMap[dupModal.existing?.id] && (
+                <button onClick={dupModal.onView} style={{ flex: 1, padding: "10px 16px", borderRadius: 9, border: `1px solid ${C.indigoBorder}`, background: C.indigoBg, color: C.indigo, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>👁 View Existing Analysis</button>
+              )}
+              <button onClick={dupModal.onOverwrite} style={{ flex: 1, padding: "10px 16px", borderRadius: 9, border: `1px solid ${C.redBorder}`, background: C.redBg, color: C.red, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>↻ Re-analyze & Overwrite</button>
+              <button onClick={() => setDupModal(null)} style={{ padding: "10px 16px", borderRadius: 9, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 14, cursor: "pointer" }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
         </div>
       )}
 
@@ -1442,7 +1498,8 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                               {res.siteDescription && <div style={{ fontSize: 13, color: C.muted, marginBottom: 10, lineHeight: 1.5 }}>{res.siteDescription}</div>}
                               {res.regulations?.map((r, i) => {
                                 const alreadyIngested = ingestedRegs?.some(ir => ir.source === u.url && ir.name.toLowerCase() === r.name.toLowerCase());
-                                const alreadyInMaster = allRegs.some(mr => mr.name.toLowerCase() === r.name.toLowerCase() || (r.reference && mr.reference?.toLowerCase() === r.reference.toLowerCase()));
+                                const masterMatch = allRegs.find(mr => mr.name.toLowerCase() === r.name.toLowerCase() || (r.reference && mr.reference?.toLowerCase() === r.reference.toLowerCase()));
+                                const alreadyInMaster = !!masterMatch;
                                 const regKey = "URL:" + (r.reference || r.name).replace(/[^a-zA-Z0-9]/g, "_").substring(0, 40);
                                 const regAnalysis = analysisMap[regKey];
                                 const regScope = scopeMap[regKey] || "Pending";
@@ -1466,7 +1523,7 @@ Rules: businessRisk=High/Medium/Low. priority=Immediate/Short-term/Ongoing. allC
                                         {alreadyIngested ? (
                                           <span style={{ fontSize: 11, color: C.green, fontWeight: 600, padding: "4px 8px", borderRadius: 6, background: C.greenBg, border: `1px solid ${C.greenBorder}` }}>✓ Ingested</span>
                                         ) : alreadyInMaster ? (
-                                          <span style={{ fontSize: 11, color: C.muted, padding: "4px 8px", borderRadius: 6, background: C.panel2, border: `1px solid ${C.border}` }}>In Inventory</span>
+                                          <span style={{ fontSize: 11, color: C.indigo, padding: "4px 8px", borderRadius: 6, background: C.indigoBg, border: `1px solid ${C.indigoBorder}` }} title={`Already in inventory: ${masterMatch?.id}`}>📋 In Inventory</span>
                                         ) : (
                                           <button onClick={() => onIngest && onIngest(r, u.url, u.title || u.url)} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.greenBorder}`, background: C.greenBg, color: C.green, cursor: "pointer", whiteSpace: "nowrap" }}>↓ Ingest</button>
                                         )}
@@ -1585,6 +1642,21 @@ function Controls({ allRegs, scopeMap, isAdmin, onDeleteControl, deletedControlI
     return l.filter(c => { if (seen.has(c.controlId)) return false; seen.add(c.controlId); return true; });
   }, [inScopeIds, cat, search, showAll, deletedControlIds]);
 
+
+  // Check if a regulation already exists in the master inventory or ingested list
+  const findDuplicate = useCallback((name, reference) => {
+    const nameLower = (name || "").toLowerCase().trim();
+    const refLower = (reference || "").toLowerCase().trim();
+    return allRegs.find(r =>
+      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
+      (refLower && r.reference && r.reference.toLowerCase() === refLower)
+    ) || ingestedRegs?.find(r =>
+      (nameLower && r.name.toLowerCase().includes(nameLower.substring(0, 30))) ||
+      (refLower && r.reference && r.reference.toLowerCase() === refLower)
+    );
+  }, [allRegs, ingestedRegs]);
+
+  const [dupModal, setDupModal] = useState(null); // { reg, fileKey, onOverwrite, onView }
   const card = { background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, padding: 22, marginBottom: 14 };
   const inp = { background: C.panel2, border: `1px solid ${C.border}`, color: C.text, borderRadius: 9, padding: "10px 14px", fontSize: 14, outline: "none" };
 
@@ -1752,6 +1824,7 @@ export default function App() {
   const [deletedControlIds, setDeletedControlIds] = useState(() => storage.get("delphi_deleted_controls", []));
   const [isAdmin, setIsAdmin] = useState(() => storage.get("delphi_admin", false));
   const [analyzeRegId, setAnalyzeRegId] = useState(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => storage.get("delphi_sidebar", false));
   const [savedUrls, setSavedUrls] = useState(() => storage.get(URLS_KEY, []));
   const [ingestedRegs, setIngestedRegs] = useState(() => storage.get(INGESTED_KEY, []));
 
@@ -1915,8 +1988,8 @@ export default function App() {
       </div>
       {/* Main app - always mounted, shown/hidden instantly via CSS - no blank frame */}
       <div style={{ display: authed ? "block" : "none" }}>
-        <Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount} />
-        <main style={{ marginLeft: 248, minHeight: "100vh" }}>
+        <Sidebar active={view} onNav={setView} onLogout={logout} totalRegs={allRegs.length} inScope={inScopeCount} collapsed={sidebarCollapsed} onToggle={() => { const v = !sidebarCollapsed; setSidebarCollapsed(v); storage.set("delphi_sidebar", v); }} />
+        <main style={{ marginLeft: sidebarCollapsed ? 56 : 220, minHeight: "100vh", transition: "margin-left 0.2s ease" }}>
           <div style={{ maxWidth: 1440, margin: "0 auto", padding: "28px 36px" }}>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 22, alignItems: "center" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
